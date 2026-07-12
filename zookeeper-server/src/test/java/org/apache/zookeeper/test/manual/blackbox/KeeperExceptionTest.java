@@ -81,6 +81,6 @@ public class KeeperExceptionTest {
         KeeperException ex = KeeperException.create(Code.NONODE);
         ex.setCode(Code.BADVERSION.intValue());
         assertEquals(Code.BADVERSION, ex.code());
-    }S
+    }
 
 }
