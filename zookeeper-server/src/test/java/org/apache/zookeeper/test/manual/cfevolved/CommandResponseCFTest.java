@@ -1,4 +1,4 @@
-package org.apache.zookeeper.test.manual.blackbox;
+package org.apache.zookeeper.test.manual.cfevolved;
 
 import java.util.Map;
 import org.junit.Test;
@@ -7,7 +7,7 @@ import static org.junit.Assert.assertEquals;
 import org.apache.zookeeper.server.admin.CommandResponse;
 
 
-public class CommandResponseTest {
+public class CommandResponseCFTest {
     @Test
     // Verifico che quando non c'è errore, toMap() produca una mappa con command corretto (error=null) e tutti i dati extra aggiunti a mano.
     public void testToMap_withErrorNull() {
@@ -28,4 +28,17 @@ public class CommandResponseTest {
         assertEquals("some error", result.get(CommandResponse.KEY_ERROR));
     }
 
+    // Test aggiunti dopo l'analisi con JaCoCo
+    @Test
+    public void testGetCommand() {
+        CommandResponse response = new CommandResponse("testCommand");
+        assertEquals("testCommand", response.getCommand());
+    }
+
+    @Test
+    public void testSetStatusCode() {
+        CommandResponse response = new CommandResponse("testCommand");
+        response.setStatusCode(404);
+        assertEquals(404, response.getStatusCode());
+    }
 }

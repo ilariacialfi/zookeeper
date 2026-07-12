@@ -1,4 +1,4 @@
-package org.apache.zookeeper.test.manual.blackbox;
+package org.apache.zookeeper.test.manual.cfevolved;
 
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
@@ -8,7 +8,7 @@ import static org.junit.Assert.assertThrows;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.KeeperException.Code;
 
-public class KeeperExceptionTest {
+public class KeeperExceptionCFTest {
 
     @Test
     public void testGetMessage_pathNull() {
@@ -65,6 +65,22 @@ public class KeeperExceptionTest {
     @Test
     public void testCodeGet_invalidCode() {
         assertThrows(IllegalArgumentException.class, () -> Code.get(9999));
+    }
+
+    // Test aggiunti dopo analisi con JaCoCo
+    @Test
+    @SuppressWarnings("deprecation")
+    public void testGetCode_deprecated() {
+        KeeperException ex = KeeperException.create(Code.NONODE);
+        assertEquals(Code.NONODE.intValue(), ex.getCode());
+    }
+
+    @Test
+    @SuppressWarnings("deprecation")
+    public void testSetCode_deprecated() {
+        KeeperException ex = KeeperException.create(Code.NONODE);
+        ex.setCode(Code.BADVERSION.intValue());
+        assertEquals(Code.BADVERSION, ex.code());
     }
 
 }
