@@ -1,0 +1,816 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>NIOServerCnxn.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server</a> &gt; <span class="el_source">NIOServerCnxn.java</span></div><h1>NIOServerCnxn.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.Writer;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.CancelledKeyException;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.SocketChannel;
+import java.security.cert.Certificate;
+import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.apache.jute.BinaryInputArchive;
+import org.apache.jute.Record;
+import org.apache.zookeeper.ClientCnxn;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.data.ACL;
+import org.apache.zookeeper.data.Id;
+import org.apache.zookeeper.data.Stat;
+import org.apache.zookeeper.proto.ConnectRequest;
+import org.apache.zookeeper.proto.ReplyHeader;
+import org.apache.zookeeper.proto.RequestHeader;
+import org.apache.zookeeper.proto.WatcherEvent;
+import org.apache.zookeeper.server.NIOServerCnxnFactory.SelectorThread;
+import org.apache.zookeeper.server.command.CommandExecutor;
+import org.apache.zookeeper.server.command.FourLetterCommands;
+import org.apache.zookeeper.server.command.NopCommand;
+import org.apache.zookeeper.server.command.SetTraceMaskCommand;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * This class handles communication with clients using NIO. There is one per
+ * client, but only one thread doing the communication.
+ */
+public class NIOServerCnxn extends ServerCnxn {
+
+<span class="nc" id="L64">    private static final Logger LOG = LoggerFactory.getLogger(NIOServerCnxn.class);</span>
+
+    private final NIOServerCnxnFactory factory;
+
+    private final SocketChannel sock;
+
+    private final SelectorThread selectorThread;
+
+    private final SelectionKey sk;
+
+    private boolean initialized;
+
+<span class="nc" id="L76">    private final ByteBuffer lenBuffer = ByteBuffer.allocate(4);</span>
+
+<span class="nc" id="L78">    protected ByteBuffer incomingBuffer = lenBuffer;</span>
+
+<span class="nc" id="L80">    private final Queue&lt;ByteBuffer&gt; outgoingBuffers = new LinkedBlockingQueue&lt;&gt;();</span>
+
+    private int sessionTimeout;
+
+    /**
+     * This is the id that uniquely identifies the session of a client. Once
+     * this session is no longer active, the ephemeral nodes will go away.
+     */
+    private long sessionId;
+
+    /**
+     * Client socket option for TCP keepalive
+     */
+<span class="nc" id="L93">    private final boolean clientTcpKeepAlive = Boolean.getBoolean(&quot;zookeeper.clientTcpKeepAlive&quot;);</span>
+
+    public NIOServerCnxn(ZooKeeperServer zk, SocketChannel sock, SelectionKey sk, NIOServerCnxnFactory factory, SelectorThread selectorThread) throws IOException {
+<span class="nc" id="L96">        super(zk);</span>
+<span class="nc" id="L97">        this.sock = sock;</span>
+<span class="nc" id="L98">        this.sk = sk;</span>
+<span class="nc" id="L99">        this.factory = factory;</span>
+<span class="nc" id="L100">        this.selectorThread = selectorThread;</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">        if (this.factory.login != null) {</span>
+<span class="nc" id="L102">            this.zooKeeperSaslServer = new ZooKeeperSaslServer(factory.login);</span>
+        }
+<span class="nc" id="L104">        sock.socket().setTcpNoDelay(true);</span>
+        /* set socket linger to false, so that socket close does not block */
+<span class="nc" id="L106">        sock.socket().setSoLinger(false, -1);</span>
+<span class="nc" id="L107">        sock.socket().setKeepAlive(clientTcpKeepAlive);</span>
+<span class="nc" id="L108">        InetAddress addr = ((InetSocketAddress) sock.socket().getRemoteSocketAddress()).getAddress();</span>
+<span class="nc" id="L109">        addAuthInfo(new Id(&quot;ip&quot;, addr.getHostAddress()));</span>
+<span class="nc" id="L110">        this.sessionTimeout = factory.sessionlessCnxnTimeout;</span>
+<span class="nc" id="L111">    }</span>
+
+    /* Send close connection packet to the client, doIO will eventually
+     * close the underlying machinery (like socket, selectorkey, etc...)
+     */
+    public void sendCloseSession() {
+<span class="nc" id="L117">        sendBuffer(ServerCnxnFactory.closeConn);</span>
+<span class="nc" id="L118">    }</span>
+
+    /**
+     * send buffer without using the asynchronous
+     * calls to selector and then close the socket
+     * @param bb
+     */
+    void sendBufferSync(ByteBuffer bb) {
+        try {
+            /* configure socket to be blocking
+             * so that we dont have to do write in
+             * a tight while loop
+             */
+<span class="nc bnc" id="L131" title="All 2 branches missed.">            if (bb != ServerCnxnFactory.closeConn) {</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">                if (sock.isOpen()) {</span>
+<span class="nc" id="L133">                    sock.configureBlocking(true);</span>
+<span class="nc" id="L134">                    sock.write(bb);</span>
+                }
+<span class="nc" id="L136">                packetSent();</span>
+            }
+<span class="nc" id="L138">        } catch (IOException ie) {</span>
+<span class="nc" id="L139">            LOG.error(&quot;Error sending data synchronously &quot;, ie);</span>
+<span class="nc" id="L140">        }</span>
+<span class="nc" id="L141">    }</span>
+
+    /**
+     * sendBuffer pushes a byte buffer onto the outgoing buffer queue for
+     * asynchronous writes.
+     */
+    public void sendBuffer(ByteBuffer... buffers) {
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        if (LOG.isTraceEnabled()) {</span>
+<span class="nc" id="L149">            LOG.trace(&quot;Add a buffer to outgoingBuffers, sk {} is valid: {}&quot;, sk, sk.isValid());</span>
+        }
+
+<span class="nc" id="L152">        synchronized (outgoingBuffers) {</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">            for (ByteBuffer buffer : buffers) {</span>
+<span class="nc" id="L154">                outgoingBuffers.add(buffer);</span>
+            }
+<span class="nc" id="L156">            outgoingBuffers.add(packetSentinel);</span>
+<span class="nc" id="L157">        }</span>
+<span class="nc" id="L158">        requestInterestOpsUpdate();</span>
+<span class="nc" id="L159">    }</span>
+
+    /**
+     * When read on socket failed, this is typically because client closed the
+     * connection. In most cases, the client does this when the server doesn't
+     * respond within 2/3 of session timeout. This possibly indicates server
+     * health/performance issue, so we need to log and keep track of stat
+     *
+     * @throws EndOfStreamException
+     */
+    private void handleFailedRead() throws EndOfStreamException {
+<span class="nc" id="L170">        setStale();</span>
+<span class="nc" id="L171">        ServerMetrics.getMetrics().CONNECTION_DROP_COUNT.add(1);</span>
+<span class="nc" id="L172">        throw new EndOfStreamException(&quot;Unable to read additional data from client,&quot;</span>
+                                       + &quot; it probably closed the socket:&quot;
+<span class="nc" id="L174">                                       + &quot; address = &quot; + sock.socket().getRemoteSocketAddress() + &quot;,&quot;</span>
+<span class="nc" id="L175">                                       + &quot; session = 0x&quot; + Long.toHexString(sessionId),</span>
+                                       DisconnectReason.UNABLE_TO_READ_FROM_CLIENT);
+    }
+
+    /** Read the request payload (everything following the length prefix) */
+    private void readPayload() throws IOException, InterruptedException, ClientCnxnLimitException {
+<span class="nc bnc" id="L181" title="All 2 branches missed.">        if (incomingBuffer.remaining() != 0) { // have we read length bytes?</span>
+<span class="nc" id="L182">            int rc = sock.read(incomingBuffer); // sock is non-blocking, so ok</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">            if (rc &lt; 0) {</span>
+<span class="nc" id="L184">                handleFailedRead();</span>
+            }
+        }
+
+<span class="nc bnc" id="L188" title="All 2 branches missed.">        if (incomingBuffer.remaining() == 0) { // have we read length bytes?</span>
+<span class="nc" id="L189">            incomingBuffer.flip();</span>
+<span class="nc" id="L190">            packetReceived(4 + incomingBuffer.remaining());</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">            if (!initialized) {</span>
+<span class="nc" id="L192">                readConnectRequest();</span>
+            } else {
+<span class="nc" id="L194">                readRequest();</span>
+            }
+<span class="nc" id="L196">            lenBuffer.clear();</span>
+<span class="nc" id="L197">            incomingBuffer = lenBuffer;</span>
+        }
+<span class="nc" id="L199">    }</span>
+
+    /**
+     * This boolean tracks whether the connection is ready for selection or
+     * not. A connection is marked as not ready for selection while it is
+     * processing an IO request. The flag is used to gatekeep pushing interest
+     * op updates onto the selector.
+     */
+<span class="nc" id="L207">    private final AtomicBoolean selectable = new AtomicBoolean(true);</span>
+
+    public boolean isSelectable() {
+<span class="nc bnc" id="L210" title="All 4 branches missed.">        return sk.isValid() &amp;&amp; selectable.get();</span>
+    }
+
+    public void disableSelectable() {
+<span class="nc" id="L214">        selectable.set(false);</span>
+<span class="nc" id="L215">    }</span>
+
+    public void enableSelectable() {
+<span class="nc" id="L218">        selectable.set(true);</span>
+<span class="nc" id="L219">    }</span>
+
+    private void requestInterestOpsUpdate() {
+<span class="nc bnc" id="L222" title="All 2 branches missed.">        if (isSelectable()) {</span>
+<span class="nc" id="L223">            selectorThread.addInterestOpsUpdateRequest(sk);</span>
+        }
+<span class="nc" id="L225">    }</span>
+
+    void handleWrite(SelectionKey k) throws IOException {
+<span class="nc bnc" id="L228" title="All 2 branches missed.">        if (outgoingBuffers.isEmpty()) {</span>
+<span class="nc" id="L229">            return;</span>
+        }
+
+        /*
+         * This is going to reset the buffer position to 0 and the
+         * limit to the size of the buffer, so that we can fill it
+         * with data from the non-direct buffers that we need to
+         * send.
+         */
+<span class="nc" id="L238">        ByteBuffer directBuffer = NIOServerCnxnFactory.getDirectBuffer();</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">        if (directBuffer == null) {</span>
+<span class="nc" id="L240">            ByteBuffer[] bufferList = new ByteBuffer[outgoingBuffers.size()];</span>
+            // Use gathered write call. This updates the positions of the
+            // byte buffers to reflect the bytes that were written out.
+<span class="nc" id="L243">            sock.write(outgoingBuffers.toArray(bufferList));</span>
+
+            // Remove the buffers that we have sent
+            ByteBuffer bb;
+<span class="nc bnc" id="L247" title="All 2 branches missed.">            while ((bb = outgoingBuffers.peek()) != null) {</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">                if (bb == ServerCnxnFactory.closeConn) {</span>
+<span class="nc" id="L249">                    throw new CloseRequestException(&quot;close requested&quot;, DisconnectReason.CLIENT_CLOSED_CONNECTION);</span>
+                }
+<span class="nc bnc" id="L251" title="All 2 branches missed.">                if (bb == packetSentinel) {</span>
+<span class="nc" id="L252">                    packetSent();</span>
+                }
+<span class="nc bnc" id="L254" title="All 2 branches missed.">                if (bb.remaining() &gt; 0) {</span>
+<span class="nc" id="L255">                    break;</span>
+                }
+<span class="nc" id="L257">                outgoingBuffers.remove();</span>
+            }
+<span class="nc" id="L259">        } else {</span>
+<span class="nc" id="L260">            directBuffer.clear();</span>
+
+<span class="nc bnc" id="L262" title="All 2 branches missed.">            for (ByteBuffer b : outgoingBuffers) {</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">                if (directBuffer.remaining() &lt; b.remaining()) {</span>
+                    /*
+                     * When we call put later, if the directBuffer is to
+                     * small to hold everything, nothing will be copied,
+                     * so we've got to slice the buffer if it's too big.
+                     */
+<span class="nc" id="L269">                    b = (ByteBuffer) b.slice().limit(directBuffer.remaining());</span>
+                }
+                /*
+                 * put() is going to modify the positions of both
+                 * buffers, put we don't want to change the position of
+                 * the source buffers (we'll do that after the send, if
+                 * needed), so we save and reset the position after the
+                 * copy
+                 */
+<span class="nc" id="L278">                int p = b.position();</span>
+<span class="nc" id="L279">                directBuffer.put(b);</span>
+<span class="nc" id="L280">                b.position(p);</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">                if (directBuffer.remaining() == 0) {</span>
+<span class="nc" id="L282">                    break;</span>
+                }
+<span class="nc" id="L284">            }</span>
+            /*
+             * Do the flip: limit becomes position, position gets set to
+             * 0. This sets us up for the write.
+             */
+<span class="nc" id="L289">            directBuffer.flip();</span>
+
+<span class="nc" id="L291">            int sent = sock.write(directBuffer);</span>
+
+            ByteBuffer bb;
+
+            // Remove the buffers that we have sent
+<span class="nc bnc" id="L296" title="All 2 branches missed.">            while ((bb = outgoingBuffers.peek()) != null) {</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">                if (bb == ServerCnxnFactory.closeConn) {</span>
+<span class="nc" id="L298">                    throw new CloseRequestException(&quot;close requested&quot;, DisconnectReason.CLIENT_CLOSED_CONNECTION);</span>
+                }
+<span class="nc bnc" id="L300" title="All 2 branches missed.">                if (bb == packetSentinel) {</span>
+<span class="nc" id="L301">                    packetSent();</span>
+                }
+<span class="nc bnc" id="L303" title="All 2 branches missed.">                if (sent &lt; bb.remaining()) {</span>
+                    /*
+                     * We only partially sent this buffer, so we update
+                     * the position and exit the loop.
+                     */
+<span class="nc" id="L308">                    bb.position(bb.position() + sent);</span>
+<span class="nc" id="L309">                    break;</span>
+                }
+                /* We've sent the whole buffer, so drop the buffer */
+<span class="nc" id="L312">                sent -= bb.remaining();</span>
+<span class="nc" id="L313">                outgoingBuffers.remove();</span>
+            }
+        }
+<span class="nc" id="L316">    }</span>
+
+    /**
+     * Only used in order to allow testing
+     */
+    protected boolean isSocketOpen() {
+<span class="nc" id="L322">        return sock.isOpen();</span>
+    }
+
+    /**
+     * Handles read/write IO on connection.
+     */
+    void doIO(SelectionKey k) throws InterruptedException {
+        try {
+<span class="nc bnc" id="L330" title="All 2 branches missed.">            if (!isSocketOpen()) {</span>
+<span class="nc" id="L331">                LOG.warn(&quot;trying to do i/o on a null socket for session: 0x{}&quot;, Long.toHexString(sessionId));</span>
+
+<span class="nc" id="L333">                return;</span>
+            }
+<span class="nc bnc" id="L335" title="All 2 branches missed.">            if (k.isReadable()) {</span>
+<span class="nc" id="L336">                int rc = sock.read(incomingBuffer);</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">                if (rc &lt; 0) {</span>
+                    try {
+<span class="nc" id="L339">                        handleFailedRead();</span>
+<span class="nc" id="L340">                    } catch (EndOfStreamException e) {</span>
+                        // no stacktrace. this case is very common, and it is usually not a problem.
+<span class="nc" id="L342">                        LOG.info(&quot;{}&quot;, e.getMessage());</span>
+                        // expecting close to log session closure
+<span class="nc" id="L344">                        close(e.getReason());</span>
+<span class="nc" id="L345">                        return;</span>
+<span class="nc" id="L346">                    }</span>
+                }
+<span class="nc bnc" id="L348" title="All 2 branches missed.">                if (incomingBuffer.remaining() == 0) {</span>
+                    boolean isPayload;
+<span class="nc bnc" id="L350" title="All 2 branches missed.">                    if (incomingBuffer == lenBuffer) { // start of next request</span>
+<span class="nc" id="L351">                        incomingBuffer.flip();</span>
+<span class="nc" id="L352">                        isPayload = readLength(k);</span>
+<span class="nc" id="L353">                        incomingBuffer.clear();</span>
+                    } else {
+                        // continuation
+<span class="nc" id="L356">                        isPayload = true;</span>
+                    }
+<span class="nc bnc" id="L358" title="All 2 branches missed.">                    if (isPayload) { // not the case for 4letterword</span>
+<span class="nc" id="L359">                        readPayload();</span>
+                    } else {
+                        // four letter words take care
+                        // need not do anything else
+<span class="nc" id="L363">                        return;</span>
+                    }
+                }
+            }
+<span class="nc bnc" id="L367" title="All 2 branches missed.">            if (k.isWritable()) {</span>
+<span class="nc" id="L368">                handleWrite(k);</span>
+
+<span class="nc bnc" id="L370" title="All 6 branches missed.">                if (!initialized &amp;&amp; !getReadInterest() &amp;&amp; !getWriteInterest()) {</span>
+<span class="nc" id="L371">                    throw new CloseRequestException(&quot;responded to info probe&quot;, DisconnectReason.INFO_PROBE);</span>
+                }
+            }
+<span class="nc" id="L374">        } catch (CancelledKeyException e) {</span>
+<span class="nc" id="L375">            LOG.warn(&quot;CancelledKeyException causing close of session: 0x{}&quot;, Long.toHexString(sessionId));</span>
+
+<span class="nc" id="L377">            LOG.debug(&quot;CancelledKeyException stack trace&quot;, e);</span>
+
+<span class="nc" id="L379">            close(DisconnectReason.CANCELLED_KEY_EXCEPTION);</span>
+<span class="nc" id="L380">        } catch (CloseRequestException e) {</span>
+            // expecting close to log session closure
+<span class="nc" id="L382">            close();</span>
+<span class="nc" id="L383">        } catch (EndOfStreamException e) {</span>
+<span class="nc" id="L384">            LOG.warn(&quot;Unexpected exception&quot;, e);</span>
+            // expecting close to log session closure
+<span class="nc" id="L386">            close(e.getReason());</span>
+<span class="nc" id="L387">        } catch (ClientCnxnLimitException e) {</span>
+            // Common case exception, print at debug level
+<span class="nc" id="L389">            ServerMetrics.getMetrics().CONNECTION_REJECTED.add(1);</span>
+<span class="nc" id="L390">            LOG.warn(&quot;Closing session 0x{}&quot;, Long.toHexString(sessionId), e);</span>
+<span class="nc" id="L391">            close(DisconnectReason.CLIENT_CNX_LIMIT);</span>
+<span class="nc" id="L392">        } catch (IOException e) {</span>
+<span class="nc" id="L393">            LOG.warn(&quot;Close of session 0x{}&quot;, Long.toHexString(sessionId), e);</span>
+<span class="nc" id="L394">            close(DisconnectReason.IO_EXCEPTION);</span>
+<span class="nc" id="L395">        }</span>
+<span class="nc" id="L396">    }</span>
+
+    protected void readRequest() throws IOException {
+<span class="nc" id="L399">        RequestHeader h = new RequestHeader();</span>
+<span class="nc" id="L400">        ByteBufferInputStream.byteBuffer2Record(incomingBuffer, h);</span>
+<span class="nc" id="L401">        RequestRecord request = RequestRecord.fromBytes(incomingBuffer.slice());</span>
+<span class="nc" id="L402">        zkServer.processPacket(this, h, request);</span>
+<span class="nc" id="L403">    }</span>
+
+    // returns whether we are interested in writing, which is determined
+    // by whether we have any pending buffers on the output queue or not
+    private boolean getWriteInterest() {
+<span class="nc bnc" id="L408" title="All 2 branches missed.">        return !outgoingBuffers.isEmpty();</span>
+    }
+
+    // returns whether we are interested in taking new requests, which is
+    // determined by whether we are currently throttled or not
+    private boolean getReadInterest() {
+<span class="nc bnc" id="L414" title="All 2 branches missed.">        return !throttled.get();</span>
+    }
+
+<span class="nc" id="L417">    private final AtomicBoolean throttled = new AtomicBoolean(false);</span>
+
+    // Throttle acceptance of new requests. If this entailed a state change,
+    // register an interest op update request with the selector.
+    //
+    // Don't support wait disable receive in NIO, ignore the parameter
+    public void disableRecv(boolean waitDisableRecv) {
+<span class="nc bnc" id="L424" title="All 2 branches missed.">        if (throttled.compareAndSet(false, true)) {</span>
+<span class="nc" id="L425">            requestInterestOpsUpdate();</span>
+        }
+<span class="nc" id="L427">    }</span>
+
+    // Disable throttling and resume acceptance of new requests. If this
+    // entailed a state change, register an interest op update request with
+    // the selector.
+    public void enableRecv() {
+<span class="nc bnc" id="L433" title="All 2 branches missed.">        if (throttled.compareAndSet(true, false)) {</span>
+<span class="nc" id="L434">            requestInterestOpsUpdate();</span>
+        }
+<span class="nc" id="L436">    }</span>
+
+    private void readConnectRequest() throws IOException, ClientCnxnLimitException {
+<span class="nc bnc" id="L439" title="All 2 branches missed.">        if (!isZKServerRunning()) {</span>
+<span class="nc" id="L440">            throw new IOException(&quot;ZooKeeperServer not running&quot;);</span>
+        }
+<span class="nc" id="L442">        BinaryInputArchive bia = BinaryInputArchive.getArchive(new ByteBufferInputStream(incomingBuffer));</span>
+<span class="nc" id="L443">        ConnectRequest request = protocolManager.deserializeConnectRequest(bia);</span>
+<span class="nc" id="L444">        zkServer.processConnectRequest(this, request);</span>
+<span class="nc" id="L445">        initialized = true;</span>
+<span class="nc" id="L446">    }</span>
+
+    /**
+     * This class wraps the sendBuffer method of NIOServerCnxn. It is
+     * responsible for chunking up the response to a client. Rather
+     * than cons'ing up a response fully in memory, which may be large
+     * for some commands, this class chunks up the result.
+     */
+<span class="nc" id="L454">    private class SendBufferWriter extends Writer {</span>
+
+<span class="nc" id="L456">        private StringBuffer sb = new StringBuffer();</span>
+
+        /**
+         * Check if we are ready to send another chunk.
+         * @param force force sending, even if not a full chunk
+         */
+        private void checkFlush(boolean force) {
+<span class="nc bnc" id="L463" title="All 6 branches missed.">            if ((force &amp;&amp; sb.length() &gt; 0) || sb.length() &gt; 2048) {</span>
+<span class="nc" id="L464">                sendBufferSync(ByteBuffer.wrap(sb.toString().getBytes(UTF_8)));</span>
+                // clear our internal buffer
+<span class="nc" id="L466">                sb.setLength(0);</span>
+            }
+<span class="nc" id="L468">        }</span>
+
+        @Override
+        public void close() throws IOException {
+<span class="nc bnc" id="L472" title="All 2 branches missed.">            if (sb == null) {</span>
+<span class="nc" id="L473">                return;</span>
+            }
+<span class="nc" id="L475">            checkFlush(true);</span>
+<span class="nc" id="L476">            sb = null; // clear out the ref to ensure no reuse</span>
+<span class="nc" id="L477">        }</span>
+
+        @Override
+        public void flush() throws IOException {
+<span class="nc" id="L481">            checkFlush(true);</span>
+<span class="nc" id="L482">        }</span>
+
+        @Override
+        public void write(char[] cbuf, int off, int len) throws IOException {
+<span class="nc" id="L486">            sb.append(cbuf, off, len);</span>
+<span class="nc" id="L487">            checkFlush(false);</span>
+<span class="nc" id="L488">        }</span>
+
+    }
+    /** Return if four letter word found and responded to, otw false **/
+    private boolean checkFourLetterWord(final SelectionKey k, final int len) throws IOException {
+        // We take advantage of the limited size of the length to look
+        // for cmds. They are all 4-bytes which fits inside of an int
+<span class="nc bnc" id="L495" title="All 2 branches missed.">        if (!FourLetterCommands.isKnown(len)) {</span>
+<span class="nc" id="L496">            return false;</span>
+        }
+
+<span class="nc" id="L499">        String cmd = FourLetterCommands.getCommandString(len);</span>
+<span class="nc" id="L500">        packetReceived(4);</span>
+
+        /** cancel the selection key to remove the socket handling
+         * from selector. This is to prevent netcat problem wherein
+         * netcat immediately closes the sending side after sending the
+         * commands and still keeps the receiving channel open.
+         * The idea is to remove the selectionkey from the selector
+         * so that the selector does not notice the closed read on the
+         * socket channel and keep the socket alive to write the data to
+         * and makes sure to close the socket after its done writing the data
+         */
+<span class="nc bnc" id="L511" title="All 2 branches missed.">        if (k != null) {</span>
+            try {
+<span class="nc" id="L513">                k.cancel();</span>
+<span class="nc" id="L514">            } catch (Exception e) {</span>
+<span class="nc" id="L515">                LOG.error(&quot;Error cancelling command selection key&quot;, e);</span>
+<span class="nc" id="L516">            }</span>
+        }
+
+<span class="nc" id="L519">        final PrintWriter pwriter = new PrintWriter(new BufferedWriter(new SendBufferWriter()));</span>
+
+        // ZOOKEEPER-2693: don't execute 4lw if it's not enabled.
+<span class="nc bnc" id="L522" title="All 2 branches missed.">        if (!FourLetterCommands.isEnabled(cmd)) {</span>
+<span class="nc" id="L523">            LOG.debug(&quot;Command {} is not executed because it is not in the whitelist.&quot;, cmd);</span>
+<span class="nc" id="L524">            NopCommand nopCmd = new NopCommand(</span>
+                pwriter,
+                this,
+                cmd + &quot; is not executed because it is not in the whitelist.&quot;);
+<span class="nc" id="L528">            nopCmd.start();</span>
+<span class="nc" id="L529">            return true;</span>
+        }
+
+<span class="nc" id="L532">        LOG.info(&quot;Processing {} command from {}&quot;, cmd, sock.socket().getRemoteSocketAddress());</span>
+
+<span class="nc bnc" id="L534" title="All 2 branches missed.">        if (len == FourLetterCommands.setTraceMaskCmd) {</span>
+<span class="nc" id="L535">            incomingBuffer = ByteBuffer.allocate(8);</span>
+<span class="nc" id="L536">            int rc = sock.read(incomingBuffer);</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">            if (rc &lt; 0) {</span>
+<span class="nc" id="L538">                throw new IOException(&quot;Read error&quot;);</span>
+            }
+<span class="nc" id="L540">            incomingBuffer.flip();</span>
+<span class="nc" id="L541">            long traceMask = incomingBuffer.getLong();</span>
+<span class="nc" id="L542">            ZooTrace.setTextTraceLevel(traceMask);</span>
+<span class="nc" id="L543">            SetTraceMaskCommand setMask = new SetTraceMaskCommand(pwriter, this, traceMask);</span>
+<span class="nc" id="L544">            setMask.start();</span>
+<span class="nc" id="L545">            return true;</span>
+        } else {
+<span class="nc" id="L547">            CommandExecutor commandExecutor = new CommandExecutor();</span>
+<span class="nc" id="L548">            return commandExecutor.execute(this, pwriter, len, zkServer, factory);</span>
+        }
+    }
+
+    /** Reads the first 4 bytes of lenBuffer, which could be true length or
+     *  four letter word.
+     *
+     * @param k selection key
+     * @return true if length read, otw false (wasn't really the length)
+     * @throws IOException if buffer size exceeds maxBuffer size
+     */
+    private boolean readLength(SelectionKey k) throws IOException {
+        // Read the length, now get the buffer
+<span class="nc" id="L561">        int len = lenBuffer.getInt();</span>
+<span class="nc bnc" id="L562" title="All 4 branches missed.">        if (!initialized &amp;&amp; checkFourLetterWord(sk, len)) {</span>
+<span class="nc" id="L563">            return false;</span>
+        }
+<span class="nc bnc" id="L565" title="All 4 branches missed.">        if (len &lt; 0 || len &gt; BinaryInputArchive.maxBuffer) {</span>
+<span class="nc" id="L566">            throw new IOException(&quot;Len error. &quot;</span>
+<span class="nc" id="L567">                    + &quot;A message from &quot; +  this.getRemoteSocketAddress() + &quot; with advertised length of &quot; + len</span>
+                    + &quot; is either a malformed message or too large to process&quot;
+                    + &quot; (length is greater than jute.maxbuffer=&quot; + BinaryInputArchive.maxBuffer + &quot;)&quot;);
+        }
+<span class="nc bnc" id="L571" title="All 2 branches missed.">        if (!isZKServerRunning()) {</span>
+<span class="nc" id="L572">            throw new IOException(&quot;ZooKeeperServer not running&quot;);</span>
+        }
+        // checkRequestSize will throw IOException if request is rejected
+<span class="nc" id="L575">        zkServer.checkRequestSizeWhenReceivingMessage(len);</span>
+<span class="nc" id="L576">        incomingBuffer = ByteBuffer.allocate(len);</span>
+<span class="nc" id="L577">        return true;</span>
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see org.apache.zookeeper.server.ServerCnxnIface#getSessionTimeout()
+     */
+    public int getSessionTimeout() {
+<span class="nc" id="L586">        return sessionTimeout;</span>
+    }
+
+    /**
+     * Used by &quot;dump&quot; 4-letter command to list all connection in
+     * cnxnExpiryMap
+     */
+    @Override
+    public String toString() {
+<span class="nc" id="L595">        return &quot;ip: &quot; + sock.socket().getRemoteSocketAddress() + &quot; sessionId: 0x&quot; + Long.toHexString(sessionId);</span>
+    }
+
+    /**
+     * Close the cnxn and remove it from the factory cnxns list.
+     */
+    @Override
+    public void close(DisconnectReason reason) {
+<span class="nc" id="L603">        disconnectReason = reason;</span>
+<span class="nc" id="L604">        close();</span>
+<span class="nc" id="L605">    }</span>
+
+    private void close() {
+<span class="nc" id="L608">        setStale();</span>
+<span class="nc bnc" id="L609" title="All 2 branches missed.">        if (!factory.removeCnxn(this)) {</span>
+<span class="nc" id="L610">            return;</span>
+        }
+
+<span class="nc bnc" id="L613" title="All 2 branches missed.">        if (zkServer != null) {</span>
+<span class="nc" id="L614">            zkServer.removeCnxn(this);</span>
+        }
+
+<span class="nc bnc" id="L617" title="All 2 branches missed.">        if (sk != null) {</span>
+            try {
+                // need to cancel this selection key from the selector
+<span class="nc" id="L620">                sk.cancel();</span>
+<span class="nc" id="L621">            } catch (Exception e) {</span>
+<span class="nc" id="L622">                LOG.debug(&quot;ignoring exception during selectionkey cancel&quot;, e);</span>
+<span class="nc" id="L623">            }</span>
+        }
+
+<span class="nc" id="L626">        closeSock();</span>
+<span class="nc" id="L627">    }</span>
+
+    /**
+     * Close resources associated with the sock of this cnxn.
+     */
+    private void closeSock() {
+<span class="nc bnc" id="L633" title="All 2 branches missed.">        if (!sock.isOpen()) {</span>
+<span class="nc" id="L634">            return;</span>
+        }
+
+<span class="nc" id="L637">        String logMsg = String.format(</span>
+            &quot;Closed socket connection for client %s %s&quot;,
+<span class="nc" id="L639">            sock.socket().getRemoteSocketAddress(),</span>
+<span class="nc bnc" id="L640" title="All 2 branches missed.">            sessionId != 0</span>
+<span class="nc" id="L641">                ? &quot;which had sessionid 0x&quot; + Long.toHexString(sessionId)</span>
+<span class="nc" id="L642">                : &quot;(no session established for client)&quot;</span>
+            );
+<span class="nc" id="L644">        LOG.debug(logMsg);</span>
+
+<span class="nc" id="L646">        closeSock(sock);</span>
+<span class="nc" id="L647">    }</span>
+
+    /**
+     * Close resources associated with a sock.
+     */
+    public static void closeSock(SocketChannel sock) {
+<span class="nc bnc" id="L653" title="All 2 branches missed.">        if (!sock.isOpen()) {</span>
+<span class="nc" id="L654">            return;</span>
+        }
+
+        try {
+            /*
+             * The following sequence of code is stupid! You would think that
+             * only sock.close() is needed, but alas, it doesn't work that way.
+             * If you just do sock.close() there are cases where the socket
+             * doesn't actually close...
+             */
+<span class="nc" id="L664">            sock.socket().shutdownOutput();</span>
+<span class="nc" id="L665">        } catch (IOException e) {</span>
+            // This is a relatively common exception that we can't avoid
+<span class="nc" id="L667">            LOG.debug(&quot;ignoring exception during output shutdown&quot;, e);</span>
+<span class="nc" id="L668">        }</span>
+        try {
+<span class="nc" id="L670">            sock.socket().shutdownInput();</span>
+<span class="nc" id="L671">        } catch (IOException e) {</span>
+            // This is a relatively common exception that we can't avoid
+<span class="nc" id="L673">            LOG.debug(&quot;ignoring exception during input shutdown&quot;, e);</span>
+<span class="nc" id="L674">        }</span>
+        try {
+<span class="nc" id="L676">            sock.socket().close();</span>
+<span class="nc" id="L677">        } catch (IOException e) {</span>
+<span class="nc" id="L678">            LOG.debug(&quot;ignoring exception during socket close&quot;, e);</span>
+<span class="nc" id="L679">        }</span>
+        try {
+<span class="nc" id="L681">            sock.close();</span>
+<span class="nc" id="L682">        } catch (IOException e) {</span>
+<span class="nc" id="L683">            LOG.debug(&quot;ignoring exception during socketchannel close&quot;, e);</span>
+<span class="nc" id="L684">        }</span>
+<span class="nc" id="L685">    }</span>
+
+<span class="nc" id="L687">    private static final ByteBuffer packetSentinel = ByteBuffer.allocate(0);</span>
+
+    @Override
+    public int sendResponse(ReplyHeader h, Record r, String tag, String cacheKey, Stat stat, int opCode) {
+<span class="nc" id="L691">        int responseSize = 0;</span>
+        try {
+<span class="nc" id="L693">            ByteBuffer[] bb = serialize(h, r, cacheKey, stat, opCode);</span>
+<span class="nc" id="L694">            responseSize = bb[0].getInt();</span>
+<span class="nc" id="L695">            bb[0].rewind();</span>
+<span class="nc" id="L696">            sendBuffer(bb);</span>
+<span class="nc" id="L697">            decrOutstandingAndCheckThrottle(h);</span>
+<span class="nc" id="L698">        } catch (Exception e) {</span>
+<span class="nc" id="L699">            LOG.warn(&quot;Unexpected exception. Destruction averted.&quot;, e);</span>
+<span class="nc" id="L700">        }</span>
+<span class="nc" id="L701">        return responseSize;</span>
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see org.apache.zookeeper.server.ServerCnxnIface#process(org.apache.zookeeper.proto.WatcherEvent)
+     */
+    @Override
+    public void process(WatchedEvent event, List&lt;ACL&gt; znodeAcl) {
+        try {
+<span class="nc" id="L712">            zkServer.checkACL(this, znodeAcl, ZooDefs.Perms.READ, getAuthInfo(), event.getPath(), null);</span>
+<span class="nc" id="L713">        } catch (KeeperException.NoAuthException e) {</span>
+<span class="nc bnc" id="L714" title="All 2 branches missed.">            if (LOG.isTraceEnabled()) {</span>
+<span class="nc" id="L715">                ZooTrace.logTraceMessage(</span>
+                    LOG,
+                    ZooTrace.EVENT_DELIVERY_TRACE_MASK,
+<span class="nc" id="L718">                    &quot;Not delivering event &quot; + event + &quot; to 0x&quot; + Long.toHexString(this.sessionId) + &quot; (filtered by ACL)&quot;);</span>
+            }
+<span class="nc" id="L720">            return;</span>
+<span class="nc" id="L721">        }</span>
+<span class="nc" id="L722">        ReplyHeader h = new ReplyHeader(ClientCnxn.NOTIFICATION_XID, event.getZxid(), 0);</span>
+<span class="nc bnc" id="L723" title="All 2 branches missed.">        if (LOG.isTraceEnabled()) {</span>
+<span class="nc" id="L724">            ZooTrace.logTraceMessage(</span>
+                LOG,
+                ZooTrace.EVENT_DELIVERY_TRACE_MASK,
+<span class="nc" id="L727">                &quot;Deliver event &quot; + event + &quot; to 0x&quot; + Long.toHexString(this.sessionId) + &quot; through &quot; + this);</span>
+        }
+
+        // Convert WatchedEvent to a type that can be sent over the wire
+<span class="nc" id="L731">        WatcherEvent e = event.getWrapper();</span>
+
+        // The last parameter OpCode here is used to select the response cache.
+        // Passing OpCode.error (with a value of -1) means we don't care, as we don't need
+        // response cache on delivering watcher events.
+<span class="nc" id="L736">        int responseSize = sendResponse(h, e, &quot;notification&quot;, null, null, ZooDefs.OpCode.error);</span>
+<span class="nc" id="L737">        ServerMetrics.getMetrics().WATCH_BYTES.add(responseSize);</span>
+<span class="nc" id="L738">    }</span>
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see org.apache.zookeeper.server.ServerCnxnIface#getSessionId()
+     */
+    @Override
+    public long getSessionId() {
+<span class="nc" id="L747">        return sessionId;</span>
+    }
+
+    @Override
+    public void setSessionId(long sessionId) {
+<span class="nc" id="L752">        this.sessionId = sessionId;</span>
+<span class="nc" id="L753">        factory.addSession(sessionId, this);</span>
+<span class="nc" id="L754">    }</span>
+
+    @Override
+    public void setSessionTimeout(int sessionTimeout) {
+<span class="nc" id="L758">        this.sessionTimeout = sessionTimeout;</span>
+<span class="nc" id="L759">        factory.touchCnxn(this);</span>
+<span class="nc" id="L760">    }</span>
+
+    @Override
+    public int getInterestOps() {
+<span class="nc bnc" id="L764" title="All 2 branches missed.">        if (!isSelectable()) {</span>
+<span class="nc" id="L765">            return 0;</span>
+        }
+<span class="nc" id="L767">        int interestOps = 0;</span>
+<span class="nc bnc" id="L768" title="All 2 branches missed.">        if (getReadInterest()) {</span>
+<span class="nc" id="L769">            interestOps |= SelectionKey.OP_READ;</span>
+        }
+<span class="nc bnc" id="L771" title="All 2 branches missed.">        if (getWriteInterest()) {</span>
+<span class="nc" id="L772">            interestOps |= SelectionKey.OP_WRITE;</span>
+        }
+<span class="nc" id="L774">        return interestOps;</span>
+    }
+
+    @Override
+    public InetSocketAddress getRemoteSocketAddress() {
+<span class="nc bnc" id="L779" title="All 2 branches missed.">        if (!sock.isOpen()) {</span>
+<span class="nc" id="L780">            return null;</span>
+        }
+<span class="nc" id="L782">        return (InetSocketAddress) sock.socket().getRemoteSocketAddress();</span>
+    }
+
+    public InetAddress getSocketAddress() {
+<span class="nc bnc" id="L786" title="All 2 branches missed.">        if (!sock.isOpen()) {</span>
+<span class="nc" id="L787">            return null;</span>
+        }
+<span class="nc" id="L789">        return sock.socket().getInetAddress();</span>
+    }
+
+    @Override
+    protected ServerStats serverStats() {
+<span class="nc bnc" id="L794" title="All 2 branches missed.">        if (zkServer == null) {</span>
+<span class="nc" id="L795">            return null;</span>
+        }
+<span class="nc" id="L797">        return zkServer.serverStats();</span>
+    }
+
+    @Override
+    public boolean isSecure() {
+<span class="nc" id="L802">        return false;</span>
+    }
+
+    @Override
+    public Certificate[] getClientCertificateChain() {
+<span class="nc" id="L807">        throw new UnsupportedOperationException(&quot;SSL is unsupported in NIOServerCnxn&quot;);</span>
+    }
+
+    @Override
+    public void setClientCertificateChain(Certificate[] chain) {
+<span class="nc" id="L812">        throw new UnsupportedOperationException(&quot;SSL is unsupported in NIOServerCnxn&quot;);</span>
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

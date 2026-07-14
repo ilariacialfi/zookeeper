@@ -1,0 +1,796 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>X509Util.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.common</a> &gt; <span class="el_source">X509Util.java</span></div><h1>X509Util.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.common;
+
+import java.io.Closeable;
+import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.net.Socket;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.WatchEvent;
+import java.security.GeneralSecurityException;
+import java.security.KeyManagementException;
+import java.security.KeyStore;
+import java.security.NoSuchAlgorithmException;
+import java.security.Security;
+import java.security.cert.CertPathValidator;
+import java.security.cert.PKIXBuilderParameters;
+import java.security.cert.PKIXRevocationChecker;
+import java.security.cert.X509CertSelector;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
+import javax.net.ssl.CertPathTrustManagerParameters;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509ExtendedTrustManager;
+import javax.net.ssl.X509KeyManager;
+import javax.net.ssl.X509TrustManager;
+import org.apache.zookeeper.common.X509Exception.KeyManagerException;
+import org.apache.zookeeper.common.X509Exception.SSLContextException;
+import org.apache.zookeeper.common.X509Exception.TrustManagerException;
+import org.apache.zookeeper.server.NettyServerCnxnFactory;
+import org.apache.zookeeper.server.auth.ProviderRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Utility code for X509 handling
+ */
+public abstract class X509Util implements Closeable, AutoCloseable {
+
+<span class="nc" id="L68">    private static final Logger LOG = LoggerFactory.getLogger(X509Util.class);</span>
+
+    private static final String REJECT_CLIENT_RENEGOTIATION_PROPERTY = &quot;jdk.tls.rejectClientInitiatedRenegotiation&quot;;
+    public static final String FIPS_MODE_PROPERTY = &quot;zookeeper.fips-mode&quot;;
+    private static final boolean FIPS_MODE_DEFAULT = true;
+    public static final String TLS_1_1 = &quot;TLSv1.1&quot;;
+    public static final String TLS_1_2 = &quot;TLSv1.2&quot;;
+    public static final String TLS_1_3 = &quot;TLSv1.3&quot;;
+
+    static {
+        // Client-initiated renegotiation in TLS is unsafe and
+        // allows MITM attacks, so we should disable it unless
+        // it was explicitly enabled by the user.
+        // A brief summary of the issue can be found at
+        // https://www.ietf.org/proceedings/76/slides/tls-7.pdf
+<span class="nc bnc" id="L83" title="All 2 branches missed.">        if (System.getProperty(REJECT_CLIENT_RENEGOTIATION_PROPERTY) == null) {</span>
+<span class="nc" id="L84">            LOG.info(&quot;Setting -D {}=true to disable client-initiated TLS renegotiation&quot;, REJECT_CLIENT_RENEGOTIATION_PROPERTY);</span>
+<span class="nc" id="L85">            System.setProperty(REJECT_CLIENT_RENEGOTIATION_PROPERTY, Boolean.TRUE.toString());</span>
+        }
+    }
+
+<span class="nc" id="L89">    private static final AtomicReference&lt;String&gt; defaultProtocol = new AtomicReference&lt;&gt;();</span>
+
+    /**
+     * Return TLSv1.2 when FIPS mode is enabled.
+     * Otherwise, returns TLSv1.3 or TLSv1.2 depending on Java runtime version being used.
+     * TLSv1.3 was first introduced in JDK11 and back-ported to OpenJDK 8u272.
+     */
+    public static String defaultTlsProtocol(ZKConfig config) {
+<span class="nc bnc" id="L97" title="All 2 branches missed.">        if (getFipsMode(config)) {</span>
+<span class="nc" id="L98">            return TLS_1_2;</span>
+        }
+
+<span class="nc" id="L101">        String proto = defaultProtocol.get();</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">        if (proto != null) {</span>
+<span class="nc" id="L103">            return proto;</span>
+        }
+
+<span class="nc" id="L106">        proto = TLS_1_2;</span>
+        try {
+<span class="nc" id="L108">            List&lt;String&gt; supported = Arrays.asList(SSLContext.getDefault().getSupportedSSLParameters().getProtocols());</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">            if (supported.contains(TLS_1_3)) {</span>
+<span class="nc" id="L110">                proto = TLS_1_3;</span>
+            }
+<span class="nc bnc" id="L112" title="All 2 branches missed.">            if (defaultProtocol.compareAndSet(null, proto)) {</span>
+<span class="nc" id="L113">                LOG.info(&quot;Supported TLS protocols are {}, default TLS protocol is {}&quot;, supported, proto);</span>
+            } else {
+<span class="nc" id="L115">                proto = defaultProtocol.get();</span>
+            }
+<span class="nc" id="L117">        } catch (NoSuchAlgorithmException e) {</span>
+            // Ignore.
+<span class="nc" id="L119">        }</span>
+<span class="nc" id="L120">        return proto;</span>
+    }
+
+    public static final int DEFAULT_HANDSHAKE_DETECTION_TIMEOUT_MILLIS = 5000;
+
+    /**
+     * Enum specifying the client auth requirement of server-side TLS sockets created by this X509Util.
+     * &lt;ul&gt;
+     *     &lt;li&gt;NONE - do not request a client certificate.&lt;/li&gt;
+     *     &lt;li&gt;WANT - request a client certificate, but allow anonymous clients to connect.&lt;/li&gt;
+     *     &lt;li&gt;NEED - require a client certificate, disconnect anonymous clients.&lt;/li&gt;
+     * &lt;/ul&gt;
+     *
+     * If the config property is not set, the default value is NEED.
+     */
+<span class="nc" id="L135">    public enum ClientAuth {</span>
+<span class="nc" id="L136">        NONE(io.netty.handler.ssl.ClientAuth.NONE),</span>
+<span class="nc" id="L137">        WANT(io.netty.handler.ssl.ClientAuth.OPTIONAL),</span>
+<span class="nc" id="L138">        NEED(io.netty.handler.ssl.ClientAuth.REQUIRE);</span>
+
+        private final io.netty.handler.ssl.ClientAuth nettyAuth;
+
+<span class="nc" id="L142">        ClientAuth(io.netty.handler.ssl.ClientAuth nettyAuth) {</span>
+<span class="nc" id="L143">            this.nettyAuth = nettyAuth;</span>
+<span class="nc" id="L144">        }</span>
+
+        /**
+         * Converts a property value to a ClientAuth enum. If the input string is empty or null, returns
+         * &lt;code&gt;ClientAuth.NEED&lt;/code&gt;.
+         * @param prop the property string.
+         * @return the ClientAuth.
+         * @throws IllegalArgumentException if the property value is not &quot;NONE&quot;, &quot;WANT&quot;, &quot;NEED&quot;, or empty/null.
+         */
+        public static ClientAuth fromPropertyValue(String prop) {
+<span class="nc bnc" id="L154" title="All 4 branches missed.">            if (prop == null || prop.length() == 0) {</span>
+<span class="nc" id="L155">                return NEED;</span>
+            }
+<span class="nc" id="L157">            return ClientAuth.valueOf(prop.toUpperCase());</span>
+        }
+
+        public io.netty.handler.ssl.ClientAuth toNettyClientAuth() {
+<span class="nc" id="L161">            return nettyAuth;</span>
+        }
+    }
+
+<span class="nc" id="L165">    private final String sslProtocolProperty = getConfigPrefix() + &quot;protocol&quot;;</span>
+<span class="nc" id="L166">    private final String sslEnabledProtocolsProperty = getConfigPrefix() + &quot;enabledProtocols&quot;;</span>
+<span class="nc" id="L167">    private final String cipherSuitesProperty = getConfigPrefix() + &quot;ciphersuites&quot;;</span>
+<span class="nc" id="L168">    private final String sslKeystoreLocationProperty = getConfigPrefix() + &quot;keyStore.location&quot;;</span>
+<span class="nc" id="L169">    private final String sslKeystorePasswdProperty = getConfigPrefix() + &quot;keyStore.password&quot;;</span>
+<span class="nc" id="L170">    private final String sslKeystorePasswdPathProperty = getConfigPrefix() + &quot;keyStore.passwordPath&quot;;</span>
+<span class="nc" id="L171">    private final String sslKeystoreTypeProperty = getConfigPrefix() + &quot;keyStore.type&quot;;</span>
+<span class="nc" id="L172">    private final String sslTruststoreLocationProperty = getConfigPrefix() + &quot;trustStore.location&quot;;</span>
+<span class="nc" id="L173">    private final String sslTruststorePasswdProperty = getConfigPrefix() + &quot;trustStore.password&quot;;</span>
+<span class="nc" id="L174">    private final String sslTruststorePasswdPathProperty = getConfigPrefix() + &quot;trustStore.passwordPath&quot;;</span>
+<span class="nc" id="L175">    private final String sslTruststoreTypeProperty = getConfigPrefix() + &quot;trustStore.type&quot;;</span>
+<span class="nc" id="L176">    private final String sslContextSupplierClassProperty = getConfigPrefix() + &quot;context.supplier.class&quot;;</span>
+<span class="nc" id="L177">    private final String sslHostnameVerificationEnabledProperty = getConfigPrefix() + &quot;hostnameVerification&quot;;</span>
+<span class="nc" id="L178">    private final String sslClientHostnameVerificationEnabledProperty = getConfigPrefix() + &quot;clientHostnameVerification&quot;;</span>
+<span class="nc" id="L179">    private final String sslAllowReverseDnsLookupProperty = getConfigPrefix() + &quot;allowReverseDnsLookup&quot;;</span>
+<span class="nc" id="L180">    private final String sslCrlEnabledProperty = getConfigPrefix() + &quot;crl&quot;;</span>
+<span class="nc" id="L181">    private final String sslOcspEnabledProperty = getConfigPrefix() + &quot;ocsp&quot;;</span>
+<span class="nc" id="L182">    private final String sslClientAuthProperty = getConfigPrefix() + &quot;clientAuth&quot;;</span>
+<span class="nc" id="L183">    private final String sslHandshakeDetectionTimeoutMillisProperty = getConfigPrefix() + &quot;handshakeDetectionTimeoutMillis&quot;;</span>
+
+<span class="nc" id="L185">    private final AtomicReference&lt;SSLContextAndOptions&gt; defaultSSLContextAndOptions = new AtomicReference&lt;&gt;(null);</span>
+
+    private FileChangeWatcher keyStoreFileWatcher;
+    private FileChangeWatcher trustStoreFileWatcher;
+
+<span class="nc" id="L190">    public X509Util() {</span>
+<span class="nc" id="L191">        keyStoreFileWatcher = trustStoreFileWatcher = null;</span>
+<span class="nc" id="L192">    }</span>
+
+    protected abstract String getConfigPrefix();
+
+    protected abstract boolean shouldVerifyClientHostname();
+
+    public String getSslProtocolProperty() {
+<span class="nc" id="L199">        return sslProtocolProperty;</span>
+    }
+
+    public String getSslEnabledProtocolsProperty() {
+<span class="nc" id="L203">        return sslEnabledProtocolsProperty;</span>
+    }
+
+    public String getCipherSuitesProperty() {
+<span class="nc" id="L207">        return cipherSuitesProperty;</span>
+    }
+
+    public String getSslKeystoreLocationProperty() {
+<span class="nc" id="L211">        return sslKeystoreLocationProperty;</span>
+    }
+
+    public String getSslCipherSuitesProperty() {
+<span class="nc" id="L215">        return cipherSuitesProperty;</span>
+    }
+
+    public String getSslKeystorePasswdProperty() {
+<span class="nc" id="L219">        return sslKeystorePasswdProperty;</span>
+    }
+
+    public String getSslKeystorePasswdPathProperty() {
+<span class="nc" id="L223">        return sslKeystorePasswdPathProperty;</span>
+    }
+
+    public String getSslKeystoreTypeProperty() {
+<span class="nc" id="L227">        return sslKeystoreTypeProperty;</span>
+    }
+
+    public String getSslTruststoreLocationProperty() {
+<span class="nc" id="L231">        return sslTruststoreLocationProperty;</span>
+    }
+
+    public String getSslTruststorePasswdProperty() {
+<span class="nc" id="L235">        return sslTruststorePasswdProperty;</span>
+    }
+
+    public String getSslTruststorePasswdPathProperty() {
+<span class="nc" id="L239">        return sslTruststorePasswdPathProperty;</span>
+    }
+
+    public String getSslTruststoreTypeProperty() {
+<span class="nc" id="L243">        return sslTruststoreTypeProperty;</span>
+    }
+
+    public String getSslContextSupplierClassProperty() {
+<span class="nc" id="L247">        return sslContextSupplierClassProperty;</span>
+    }
+
+    public String getSslHostnameVerificationEnabledProperty() {
+<span class="nc" id="L251">        return sslHostnameVerificationEnabledProperty;</span>
+    }
+
+    public String getSslClientHostnameVerificationEnabledProperty() {
+<span class="nc" id="L255">        return sslClientHostnameVerificationEnabledProperty;</span>
+    }
+
+    public String getSslAllowReverseDnsLookupProperty() {
+<span class="nc" id="L259">        return sslAllowReverseDnsLookupProperty;</span>
+    }
+
+    public String getSslCrlEnabledProperty() {
+<span class="nc" id="L263">        return sslCrlEnabledProperty;</span>
+    }
+
+    public String getSslOcspEnabledProperty() {
+<span class="nc" id="L267">        return sslOcspEnabledProperty;</span>
+    }
+
+    public String getSslClientAuthProperty() {
+<span class="nc" id="L271">        return sslClientAuthProperty;</span>
+    }
+
+    /**
+     * Returns the config property key that controls the amount of time, in milliseconds, that the first
+     * UnifiedServerSocket read operation will block for when trying to detect the client mode (TLS or PLAINTEXT).
+     *
+     * @return the config property key.
+     */
+    public String getSslHandshakeDetectionTimeoutMillisProperty() {
+<span class="nc" id="L281">        return sslHandshakeDetectionTimeoutMillisProperty;</span>
+    }
+
+    public String getFipsModeProperty() {
+<span class="nc" id="L285">        return FIPS_MODE_PROPERTY;</span>
+    }
+
+    public static boolean getFipsMode(ZKConfig config) {
+<span class="nc" id="L289">        return config.getBoolean(FIPS_MODE_PROPERTY, FIPS_MODE_DEFAULT);</span>
+    }
+
+    public boolean isServerHostnameVerificationEnabled(ZKConfig config) {
+<span class="nc" id="L293">        return config.getBoolean(this.getSslHostnameVerificationEnabledProperty(), true);</span>
+    }
+
+    public boolean isClientHostnameVerificationEnabled(ZKConfig config) {
+<span class="nc bnc" id="L297" title="All 2 branches missed.">        return isServerHostnameVerificationEnabled(config)</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">            &amp;&amp; config.getBoolean(this.getSslClientHostnameVerificationEnabledProperty(), shouldVerifyClientHostname());</span>
+    }
+
+    public boolean allowReverseDnsLookup(ZKConfig config) {
+<span class="nc" id="L302">        return config.getBoolean(this.getSslAllowReverseDnsLookupProperty(), false);</span>
+    }
+
+    public SSLContext getDefaultSSLContext() throws X509Exception.SSLContextException {
+<span class="nc" id="L306">        return getDefaultSSLContextAndOptions().getSSLContext();</span>
+    }
+
+    public SSLContext createSSLContext(ZKConfig config) throws SSLContextException {
+<span class="nc" id="L310">        return createSSLContextAndOptions(config).getSSLContext();</span>
+    }
+
+    public SSLContextAndOptions getDefaultSSLContextAndOptions() throws X509Exception.SSLContextException {
+<span class="nc" id="L314">        SSLContextAndOptions result = defaultSSLContextAndOptions.get();</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">        if (result == null) {</span>
+<span class="nc" id="L316">            result = createSSLContextAndOptions();</span>
+<span class="nc bnc" id="L317" title="All 2 branches missed.">            if (!defaultSSLContextAndOptions.compareAndSet(null, result)) {</span>
+                // lost the race, another thread already set the value
+<span class="nc" id="L319">                result = defaultSSLContextAndOptions.get();</span>
+            }
+        }
+<span class="nc" id="L322">        return result;</span>
+    }
+
+    private void resetDefaultSSLContextAndOptions() throws X509Exception.SSLContextException {
+<span class="nc" id="L326">        SSLContextAndOptions newContext = createSSLContextAndOptions();</span>
+<span class="nc" id="L327">        defaultSSLContextAndOptions.set(newContext);</span>
+
+<span class="nc bnc" id="L329" title="All 2 branches missed.">        if (Boolean.getBoolean(NettyServerCnxnFactory.CLIENT_CERT_RELOAD_KEY)) {</span>
+<span class="nc" id="L330">            ProviderRegistry.addOrUpdateProvider(ProviderRegistry.AUTHPROVIDER_PROPERTY_PREFIX + &quot;x509&quot;);</span>
+        }
+<span class="nc" id="L332">    }</span>
+
+    private SSLContextAndOptions createSSLContextAndOptions() throws SSLContextException {
+        /*
+         * Since Configuration initializes the key store and trust store related
+         * configuration from system property. Reading property from
+         * configuration will be same reading from system property
+         */
+<span class="nc" id="L340">        return createSSLContextAndOptions(new ZKConfig());</span>
+    }
+
+    /**
+     * Returns the max amount of time, in milliseconds, that the first UnifiedServerSocket read() operation should
+     * block for when trying to detect the client mode (TLS or PLAINTEXT).
+     * Defaults to {@link X509Util#DEFAULT_HANDSHAKE_DETECTION_TIMEOUT_MILLIS}.
+     *
+     * @return the handshake detection timeout, in milliseconds.
+     */
+    public int getSslHandshakeTimeoutMillis() {
+        try {
+<span class="nc" id="L352">            SSLContextAndOptions ctx = getDefaultSSLContextAndOptions();</span>
+<span class="nc" id="L353">            return ctx.getHandshakeDetectionTimeoutMillis();</span>
+<span class="nc" id="L354">        } catch (SSLContextException e) {</span>
+<span class="nc" id="L355">            LOG.error(&quot;Error creating SSL context and options&quot;, e);</span>
+<span class="nc" id="L356">            return DEFAULT_HANDSHAKE_DETECTION_TIMEOUT_MILLIS;</span>
+<span class="nc" id="L357">        } catch (Exception e) {</span>
+<span class="nc" id="L358">            LOG.error(&quot;Error parsing config property {}&quot;, getSslHandshakeDetectionTimeoutMillisProperty(), e);</span>
+<span class="nc" id="L359">            return DEFAULT_HANDSHAKE_DETECTION_TIMEOUT_MILLIS;</span>
+        }
+    }
+
+    @SuppressWarnings(&quot;unchecked&quot;)
+    public SSLContextAndOptions createSSLContextAndOptions(ZKConfig config) throws SSLContextException {
+<span class="nc" id="L365">        final String supplierContextClassName = config.getProperty(sslContextSupplierClassProperty);</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">        if (supplierContextClassName != null) {</span>
+<span class="nc" id="L367">            LOG.debug(&quot;Loading SSLContext supplier from property '{}'&quot;, sslContextSupplierClassProperty);</span>
+
+            try {
+<span class="nc" id="L370">                Class&lt;?&gt; sslContextClass = Class.forName(supplierContextClassName);</span>
+<span class="nc" id="L371">                Supplier&lt;SSLContext&gt; sslContextSupplier = (Supplier&lt;SSLContext&gt;) sslContextClass.getConstructor().newInstance();</span>
+<span class="nc" id="L372">                return new SSLContextAndOptions(this, config, sslContextSupplier.get());</span>
+<span class="nc" id="L373">            } catch (ClassNotFoundException</span>
+                | ClassCastException
+                | NoSuchMethodException
+                | InvocationTargetException
+                | InstantiationException
+                | IllegalAccessException e) {
+<span class="nc" id="L379">                throw new SSLContextException(&quot;Could not retrieve the SSLContext from supplier source '&quot;</span>
+                                              + supplierContextClassName
+                                              + &quot;' provided in the property '&quot;
+                                              + sslContextSupplierClassProperty
+                                              + &quot;'&quot;, e);
+            }
+        } else {
+<span class="nc" id="L386">            return createSSLContextAndOptionsFromConfig(config);</span>
+        }
+    }
+
+    public SSLContextAndOptions createSSLContextAndOptionsFromConfig(ZKConfig config) throws SSLContextException {
+        // There are legal states in some use cases for null KeyManager or TrustManager.
+        // But if a user wanna specify one, location is required. Password defaults to empty string if it is not
+        // specified by the user.
+<span class="nc" id="L394">        KeyManager[] keyManagers = null;</span>
+<span class="nc" id="L395">        TrustManager[] trustManagers = null;</span>
+
+        try {
+<span class="nc" id="L398">            KeyManager km = buildKeyManager(config);</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">            if (km != null) {</span>
+<span class="nc" id="L400">                keyManagers = new KeyManager[]{km};</span>
+            }
+<span class="nc" id="L402">        } catch (KeyManagerException keyManagerException) {</span>
+<span class="nc" id="L403">            throw new SSLContextException(&quot;Failed to create KeyManager&quot;, keyManagerException);</span>
+<span class="nc" id="L404">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L405">            String keyStoreTypeProp = config.getProperty(sslKeystoreTypeProperty);</span>
+<span class="nc" id="L406">            throw new SSLContextException(&quot;Bad value for &quot; + sslKeystoreTypeProperty + &quot;: &quot; + keyStoreTypeProp, e);</span>
+<span class="nc" id="L407">        }</span>
+
+        try {
+<span class="nc" id="L410">            TrustManager tm = buildTrustManager(config);</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">            if (tm != null) {</span>
+<span class="nc" id="L412">                trustManagers = new TrustManager[]{tm};</span>
+            }
+<span class="nc" id="L414">        } catch (TrustManagerException trustManagerException) {</span>
+<span class="nc" id="L415">            throw new SSLContextException(&quot;Failed to create TrustManager&quot;, trustManagerException);</span>
+<span class="nc" id="L416">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L417">            String trustStoreTypeProp = config.getProperty(sslTruststoreTypeProperty);</span>
+<span class="nc" id="L418">            throw new SSLContextException(&quot;Bad value for &quot;</span>
+                    + sslTruststoreTypeProperty
+                    + &quot;: &quot;
+                    + trustStoreTypeProp, e);
+<span class="nc" id="L422">        }</span>
+<span class="nc" id="L423">        String defaultTlsProtocol = defaultTlsProtocol(config);</span>
+<span class="nc" id="L424">        String protocol = config.getProperty(sslProtocolProperty, defaultTlsProtocol);</span>
+        try {
+<span class="nc" id="L426">            SSLContext sslContext = SSLContext.getInstance(protocol);</span>
+<span class="nc" id="L427">            sslContext.init(keyManagers, trustManagers, null);</span>
+<span class="nc" id="L428">            return new SSLContextAndOptions(this, config, sslContext);</span>
+<span class="nc" id="L429">        } catch (NoSuchAlgorithmException | KeyManagementException sslContextInitException) {</span>
+<span class="nc" id="L430">            throw new SSLContextException(sslContextInitException);</span>
+        }
+    }
+
+    public static KeyStore loadKeyStore(
+        String keyStoreLocation,
+        String keyStorePassword,
+        String keyStoreTypeProp) throws IOException, GeneralSecurityException {
+<span class="nc" id="L438">        KeyStoreFileType storeFileType = KeyStoreFileType.fromPropertyValueOrFileName(keyStoreTypeProp, keyStoreLocation);</span>
+<span class="nc" id="L439">        return FileKeyStoreLoaderBuilderProvider</span>
+<span class="nc" id="L440">            .getBuilderForKeyStoreFileType(storeFileType)</span>
+<span class="nc" id="L441">            .setKeyStorePath(keyStoreLocation)</span>
+<span class="nc" id="L442">            .setKeyStorePassword(keyStorePassword)</span>
+<span class="nc" id="L443">            .build()</span>
+<span class="nc" id="L444">            .loadKeyStore();</span>
+    }
+
+    public static KeyStore loadTrustStore(
+        String trustStoreLocation,
+        String trustStorePassword,
+        String trustStoreTypeProp) throws IOException, GeneralSecurityException {
+<span class="nc" id="L451">        KeyStoreFileType storeFileType = KeyStoreFileType.fromPropertyValueOrFileName(trustStoreTypeProp, trustStoreLocation);</span>
+<span class="nc" id="L452">        return FileKeyStoreLoaderBuilderProvider</span>
+<span class="nc" id="L453">            .getBuilderForKeyStoreFileType(storeFileType)</span>
+<span class="nc" id="L454">            .setTrustStorePath(trustStoreLocation)</span>
+<span class="nc" id="L455">            .setTrustStorePassword(trustStorePassword)</span>
+<span class="nc" id="L456">            .build()</span>
+<span class="nc" id="L457">            .loadTrustStore();</span>
+    }
+
+    /**
+     * Returns the password specified by the given property or from the file specified by the given path property.
+     * If both are specified, the value stored in the file will be returned.
+     *
+     * @param config  Zookeeper configuration
+     * @param propertyName  property name
+     * @param pathPropertyName path property name
+     * @return the password value
+     */
+    public String getPasswordFromConfigPropertyOrFile(final ZKConfig config,
+                                                      final String propertyName,
+                                                      final String pathPropertyName) {
+<span class="nc" id="L472">        String value = config.getProperty(propertyName, &quot;&quot;);</span>
+<span class="nc" id="L473">        final String pathProperty = config.getProperty(pathPropertyName, &quot;&quot;);</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">        if (!pathProperty.isEmpty()) {</span>
+<span class="nc" id="L475">            value = String.valueOf(SecretUtils.readSecret(pathProperty));</span>
+        }
+<span class="nc" id="L477">        return value;</span>
+    }
+
+    public X509KeyManager buildKeyManager(ZKConfig config) throws KeyManagerException {
+<span class="nc" id="L481">        String keyStoreLocation = config.getProperty(getSslKeystoreLocationProperty(), &quot;&quot;);</span>
+<span class="nc bnc" id="L482" title="All 2 branches missed.">        if (keyStoreLocation.isEmpty()) {</span>
+<span class="nc" id="L483">            LOG.warn(&quot;{} not specified for X509KeyManager&quot;, getSslKeystoreLocationProperty());</span>
+<span class="nc" id="L484">            return null;</span>
+        }
+<span class="nc" id="L486">        String keyStorePassword = getPasswordFromConfigPropertyOrFile(config, getSslKeystorePasswdProperty(),</span>
+<span class="nc" id="L487">                getSslKeystorePasswdPathProperty());</span>
+<span class="nc" id="L488">        String keyStoreType = config.getProperty(getSslKeystoreTypeProperty());</span>
+<span class="nc" id="L489">        return createKeyManager(keyStoreLocation, keyStorePassword, keyStoreType);</span>
+    }
+
+    /**
+     * Creates a key manager by loading the key store from the given file of
+     * the given type, optionally decrypting it using the given password.
+     * @param keyStoreLocation the location of the key store file.
+     * @param keyStorePassword optional password to decrypt the key store. If
+     *                         empty, assumes the key store is not encrypted.
+     * @param keyStoreTypeProp must be JKS, PEM, PKCS12, BCFKS or null. If null,
+     *                         attempts to autodetect the key store type from
+     *                         the file extension (e.g. .jks / .pem).
+     * @return the key manager.
+     * @throws KeyManagerException if something goes wrong.
+     */
+    public static X509KeyManager createKeyManager(
+        String keyStoreLocation,
+        String keyStorePassword,
+        String keyStoreTypeProp) throws KeyManagerException {
+<span class="nc bnc" id="L508" title="All 2 branches missed.">        if (keyStorePassword == null) {</span>
+<span class="nc" id="L509">            keyStorePassword = &quot;&quot;;</span>
+        }
+        try {
+<span class="nc" id="L512">            KeyStore ks = loadKeyStore(keyStoreLocation, keyStorePassword, keyStoreTypeProp);</span>
+<span class="nc" id="L513">            KeyManagerFactory kmf = KeyManagerFactory.getInstance(&quot;PKIX&quot;);</span>
+<span class="nc" id="L514">            kmf.init(ks, keyStorePassword.toCharArray());</span>
+
+<span class="nc bnc" id="L516" title="All 2 branches missed.">            for (KeyManager km : kmf.getKeyManagers()) {</span>
+<span class="nc bnc" id="L517" title="All 2 branches missed.">                if (km instanceof X509KeyManager) {</span>
+<span class="nc" id="L518">                    return (X509KeyManager) km;</span>
+                }
+            }
+<span class="nc" id="L521">            throw new KeyManagerException(&quot;Couldn't find X509KeyManager&quot;);</span>
+<span class="nc" id="L522">        } catch (IOException | GeneralSecurityException | IllegalArgumentException e) {</span>
+<span class="nc" id="L523">            throw new KeyManagerException(e);</span>
+        }
+    }
+
+    public X509TrustManager buildTrustManager(ZKConfig config) throws TrustManagerException {
+<span class="nc" id="L528">        String trustStoreLocationProp = config.getProperty(sslTruststoreLocationProperty, &quot;&quot;);</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">        if (trustStoreLocationProp.isEmpty()) {</span>
+<span class="nc" id="L530">            LOG.warn(&quot;{} not specified for X509TrustManager&quot;, sslTruststoreLocationProperty);</span>
+<span class="nc" id="L531">            return null;</span>
+        }
+
+<span class="nc" id="L534">        String trustStorePasswordProp = getPasswordFromConfigPropertyOrFile(config, sslTruststorePasswdProperty, sslTruststorePasswdPathProperty);</span>
+<span class="nc" id="L535">        String trustStoreTypeProp = config.getProperty(sslTruststoreTypeProperty);</span>
+
+<span class="nc" id="L537">        boolean sslCrlEnabled = config.getBoolean(this.sslCrlEnabledProperty, Boolean.getBoolean(&quot;com.sun.net.ssl.checkRevocation&quot;));</span>
+<span class="nc" id="L538">        boolean sslOcspEnabled = config.getBoolean(this.sslOcspEnabledProperty, Boolean.parseBoolean(Security.getProperty(&quot;ocsp.enable&quot;)));</span>
+
+<span class="nc" id="L540">        boolean sslServerHostnameVerificationEnabled = isServerHostnameVerificationEnabled(config);</span>
+<span class="nc" id="L541">        boolean sslClientHostnameVerificationEnabled = isClientHostnameVerificationEnabled(config);</span>
+<span class="nc" id="L542">        boolean allowReverseDnsLookup = allowReverseDnsLookup(config);</span>
+<span class="nc" id="L543">        boolean fipsMode = getFipsMode(config);</span>
+
+<span class="nc" id="L545">        return createTrustManagerInternal(</span>
+                trustStoreLocationProp,
+                trustStorePasswordProp,
+                trustStoreTypeProp,
+                sslCrlEnabled,
+                sslOcspEnabled,
+                sslServerHostnameVerificationEnabled,
+                sslClientHostnameVerificationEnabled,
+                allowReverseDnsLookup,
+                fipsMode);
+    }
+
+    // @VisibleForTesting
+    protected X509TrustManager createTrustManagerInternal(
+            String trustStoreLocation,
+            String trustStorePassword,
+            String trustStoreTypeProp,
+            boolean crlEnabled,
+            boolean ocspEnabled,
+            final boolean serverHostnameVerificationEnabled,
+            final boolean clientHostnameVerificationEnabled,
+            final boolean allowReverseDnsLookup,
+            final boolean fipsMode) throws TrustManagerException {
+<span class="nc" id="L568">        return createTrustManager(</span>
+                trustStoreLocation,
+                trustStorePassword,
+                trustStoreTypeProp,
+                crlEnabled,
+                ocspEnabled,
+                serverHostnameVerificationEnabled,
+                clientHostnameVerificationEnabled,
+                allowReverseDnsLookup,
+                fipsMode);
+    }
+
+    /**
+     * Creates a trust manager by loading the trust store from the given file
+     * of the given type, optionally decrypting it using the given password.
+     *
+     * @param trustStoreLocation                the location of the trust store file.
+     * @param trustStorePassword                optional password to decrypt the trust store
+     *                                          (only applies to JKS trust stores). If empty,
+     *                                          assumes the trust store is not encrypted.
+     * @param trustStoreTypeProp                must be JKS, PEM, PKCS12, BCFKS or null. If
+     *                                          null, attempts to autodetect the trust store
+     *                                          type from the file extension (e.g. .jks / .pem).
+     * @param crlEnabled                        enable CRL (certificate revocation list) checks.
+     * @param ocspEnabled                       enable OCSP (online certificate status protocol)
+     *                                          checks.
+     * @param serverHostnameVerificationEnabled if true, verify hostnames of
+     *                                          remote servers that client
+     *                                          sockets created by this
+     *                                          X509Util connect to.
+     * @param clientHostnameVerificationEnabled if true, verify hostnames of
+     *                                          remote clients that server
+     *                                          sockets created by this
+     *                                          X509Util accept connections
+     *                                          from.
+     * @return the trust manager.
+     * @throws TrustManagerException if something goes wrong.
+     */
+    public static X509TrustManager createTrustManager(
+        String trustStoreLocation,
+        String trustStorePassword,
+        String trustStoreTypeProp,
+        boolean crlEnabled,
+        boolean ocspEnabled,
+        final boolean serverHostnameVerificationEnabled,
+        final boolean clientHostnameVerificationEnabled,
+        final boolean allowReverseDnsLookup,
+        final boolean fipsMode) throws TrustManagerException {
+<span class="nc bnc" id="L616" title="All 2 branches missed.">        if (trustStorePassword == null) {</span>
+<span class="nc" id="L617">            trustStorePassword = &quot;&quot;;</span>
+        }
+        try {
+<span class="nc" id="L620">            KeyStore ts = loadTrustStore(trustStoreLocation, trustStorePassword, trustStoreTypeProp);</span>
+<span class="nc" id="L621">            PKIXBuilderParameters pbParams = new PKIXBuilderParameters(ts, new X509CertSelector());</span>
+<span class="nc bnc" id="L622" title="All 2 branches missed.">            if (crlEnabled) {</span>
+                // See [RevocationChecker][1] for details. Basically, we are mimicking the legacy path,
+                // which relies significantly on jvm wide properties[2], as that is the path we are routing
+                // before (i.e. no explicit `PKIXRevocationChecker`).
+                //
+                // By reading but not writing these properties, we conform to but not interfere with what
+                // admin set while still keep backward compatibility.
+                // 1. Default &quot;zookeeper.ssl.crl&quot; to jvm property &quot;com.sun.net.ssl.checkRevocation&quot; if it is unset.
+                // 2. Default &quot;zookeeper.ssl.ocsp&quot; to jvm security property &quot;ocsp.enable&quot; if it is unset.
+                // 3. Set `Option.ONLY_END_ENTITY` for jvm security property &quot;com.sun.security.onlyCheckRevocationOfEECert&quot;.
+                // 4. Don't set &quot;com.sun.security.enableCRLDP&quot; as it is always enabled in no legacy path.
+                //
+                // See also:
+                // * https://docs.oracle.com/javase/8/docs/technotes/guides/security/jsse/ocsp.html
+                // * https://docs.oracle.com/javase/8/docs/technotes/guides/security/jsse/JSSERefGuide.html
+                // * https://docs.oracle.com/javase/8/docs/technotes/guides/security/certpath/CertPathProgGuide.html#PKIXRevocationChecker
+                //
+                // [1]: https://github.com/openjdk/jdk/blob/jdk-11%2B28/src/java.base/share/classes/sun/security/provider/certpath/RevocationChecker.java#L124
+                // [2]: https://github.com/openjdk/jdk/blob/jdk-11%2B28/src/java.base/share/classes/sun/security/provider/certpath/RevocationChecker.java#L179
+<span class="nc" id="L641">                Set&lt;PKIXRevocationChecker.Option&gt; options = new HashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L642" title="All 2 branches missed.">                if (!ocspEnabled) {</span>
+<span class="nc" id="L643">                    options.add(PKIXRevocationChecker.Option.NO_FALLBACK);</span>
+<span class="nc" id="L644">                    options.add(PKIXRevocationChecker.Option.PREFER_CRLS);</span>
+                }
+<span class="nc bnc" id="L646" title="All 2 branches missed.">                if (Boolean.parseBoolean(Security.getProperty(&quot;com.sun.security.onlyCheckRevocationOfEECert&quot;)))  {</span>
+<span class="nc" id="L647">                    options.add(PKIXRevocationChecker.Option.ONLY_END_ENTITY);</span>
+                }
+
+<span class="nc" id="L650">                PKIXRevocationChecker revocationChecker = (PKIXRevocationChecker) CertPathValidator.getInstance(&quot;PKIX&quot;).getRevocationChecker();</span>
+<span class="nc" id="L651">                revocationChecker.setOptions(options);</span>
+<span class="nc" id="L652">                pbParams.addCertPathChecker(revocationChecker);</span>
+<span class="nc" id="L653">            } else {</span>
+<span class="nc" id="L654">                pbParams.setRevocationEnabled(false);</span>
+            }
+
+            // Revocation checking is only supported with the PKIX algorithm
+<span class="nc" id="L658">            TrustManagerFactory tmf = TrustManagerFactory.getInstance(&quot;PKIX&quot;);</span>
+<span class="nc" id="L659">            tmf.init(new CertPathTrustManagerParameters(pbParams));</span>
+
+<span class="nc bnc" id="L661" title="All 2 branches missed.">            for (final TrustManager tm : tmf.getTrustManagers()) {</span>
+<span class="nc bnc" id="L662" title="All 2 branches missed.">                if (tm instanceof X509ExtendedTrustManager) {</span>
+<span class="nc bnc" id="L663" title="All 2 branches missed.">                    if (fipsMode) {</span>
+<span class="nc bnc" id="L664" title="All 2 branches missed.">                        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L665">                            LOG.debug(&quot;FIPS mode is ON: selecting standard x509 trust manager {}&quot;, tm);</span>
+                        }
+<span class="nc" id="L667">                        return (X509TrustManager) tm;</span>
+                    }
+<span class="nc bnc" id="L669" title="All 2 branches missed.">                    if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L670">                        LOG.debug(&quot;FIPS mode is OFF: creating ZKTrustManager&quot;);</span>
+                    }
+<span class="nc" id="L672">                    return new ZKTrustManager((X509ExtendedTrustManager) tm, serverHostnameVerificationEnabled,</span>
+                        clientHostnameVerificationEnabled, allowReverseDnsLookup);
+                }
+            }
+<span class="nc" id="L676">            throw new TrustManagerException(&quot;Couldn't find X509TrustManager&quot;);</span>
+<span class="nc" id="L677">        } catch (IOException | GeneralSecurityException | IllegalArgumentException e) {</span>
+<span class="nc" id="L678">            throw new TrustManagerException(e);</span>
+        }
+    }
+
+    public SSLSocket createSSLSocket() throws X509Exception, IOException {
+<span class="nc" id="L683">        return getDefaultSSLContextAndOptions().createSSLSocket();</span>
+    }
+
+    public SSLSocket createSSLSocket(Socket socket, byte[] pushbackBytes) throws X509Exception, IOException {
+<span class="nc" id="L687">        return getDefaultSSLContextAndOptions().createSSLSocket(socket, pushbackBytes);</span>
+    }
+
+    public SSLServerSocket createSSLServerSocket() throws X509Exception, IOException {
+<span class="nc" id="L691">        return getDefaultSSLContextAndOptions().createSSLServerSocket();</span>
+    }
+
+    public SSLServerSocket createSSLServerSocket(int port) throws X509Exception, IOException {
+<span class="nc" id="L695">        return getDefaultSSLContextAndOptions().createSSLServerSocket(port);</span>
+    }
+
+    private FileChangeWatcher newFileChangeWatcher(String fileLocation) throws IOException {
+<span class="nc bnc" id="L699" title="All 4 branches missed.">        if (fileLocation == null || fileLocation.isEmpty()) {</span>
+<span class="nc" id="L700">            return null;</span>
+        }
+<span class="nc" id="L702">        final Path filePath = Paths.get(fileLocation).toAbsolutePath();</span>
+<span class="nc" id="L703">        Path parentPath = filePath.getParent();</span>
+<span class="nc bnc" id="L704" title="All 2 branches missed.">        if (parentPath == null) {</span>
+<span class="nc" id="L705">            throw new IOException(&quot;Key/trust store path does not have a parent: &quot; + filePath);</span>
+        }
+<span class="nc" id="L707">        return new FileChangeWatcher(parentPath, watchEvent -&gt; {</span>
+<span class="nc" id="L708">            handleWatchEvent(filePath, watchEvent);</span>
+<span class="nc" id="L709">        });</span>
+    }
+
+    /**
+     * Enables automatic reloading of the trust store and key store files when they change on disk.
+     *
+     * @throws IOException if creating the FileChangeWatcher objects fails.
+     */
+    public void enableCertFileReloading() throws IOException {
+<span class="nc" id="L718">        LOG.info(&quot;enabling cert file reloading&quot;);</span>
+<span class="nc" id="L719">        ZKConfig config = new ZKConfig();</span>
+<span class="nc" id="L720">        FileChangeWatcher newKeyStoreFileWatcher = newFileChangeWatcher(config.getProperty(sslKeystoreLocationProperty));</span>
+<span class="nc bnc" id="L721" title="All 2 branches missed.">        if (newKeyStoreFileWatcher != null) {</span>
+            // stop old watcher if there is one
+<span class="nc bnc" id="L723" title="All 2 branches missed.">            if (keyStoreFileWatcher != null) {</span>
+<span class="nc" id="L724">                keyStoreFileWatcher.stop();</span>
+            }
+<span class="nc" id="L726">            keyStoreFileWatcher = newKeyStoreFileWatcher;</span>
+<span class="nc" id="L727">            keyStoreFileWatcher.start();</span>
+        }
+<span class="nc" id="L729">        FileChangeWatcher newTrustStoreFileWatcher = newFileChangeWatcher(config.getProperty(sslTruststoreLocationProperty));</span>
+<span class="nc bnc" id="L730" title="All 2 branches missed.">        if (newTrustStoreFileWatcher != null) {</span>
+            // stop old watcher if there is one
+<span class="nc bnc" id="L732" title="All 2 branches missed.">            if (trustStoreFileWatcher != null) {</span>
+<span class="nc" id="L733">                trustStoreFileWatcher.stop();</span>
+            }
+<span class="nc" id="L735">            trustStoreFileWatcher = newTrustStoreFileWatcher;</span>
+<span class="nc" id="L736">            trustStoreFileWatcher.start();</span>
+        }
+<span class="nc" id="L738">    }</span>
+
+    /**
+     * Disables automatic reloading of the trust store and key store files when they change on disk.
+     * Stops background threads and closes WatchService instances.
+     */
+    @Override
+    public void close() {
+<span class="nc" id="L746">        defaultSSLContextAndOptions.set(null);</span>
+<span class="nc bnc" id="L747" title="All 2 branches missed.">        if (keyStoreFileWatcher != null) {</span>
+<span class="nc" id="L748">            keyStoreFileWatcher.stop();</span>
+<span class="nc" id="L749">            keyStoreFileWatcher = null;</span>
+        }
+<span class="nc bnc" id="L751" title="All 2 branches missed.">        if (trustStoreFileWatcher != null) {</span>
+<span class="nc" id="L752">            trustStoreFileWatcher.stop();</span>
+<span class="nc" id="L753">            trustStoreFileWatcher = null;</span>
+        }
+<span class="nc" id="L755">    }</span>
+
+    /**
+     * Handler for watch events that let us know a file we may care about has changed on disk.
+     *
+     * @param filePath the path to the file we are watching for changes.
+     * @param event    the WatchEvent.
+     */
+    private void handleWatchEvent(Path filePath, WatchEvent&lt;?&gt; event) {
+<span class="nc" id="L764">        boolean shouldResetContext = false;</span>
+<span class="nc" id="L765">        Path dirPath = filePath.getParent();</span>
+<span class="nc bnc" id="L766" title="All 2 branches missed.">        if (event.kind().equals(StandardWatchEventKinds.OVERFLOW)) {</span>
+            // If we get notified about possibly missed events, reload the key store / trust store just to be sure.
+<span class="nc" id="L768">            shouldResetContext = true;</span>
+<span class="nc bnc" id="L769" title="All 2 branches missed.">        } else if (event.kind().equals(StandardWatchEventKinds.ENTRY_MODIFY)</span>
+<span class="nc bnc" id="L770" title="All 2 branches missed.">                   || event.kind().equals(StandardWatchEventKinds.ENTRY_CREATE)) {</span>
+<span class="nc" id="L771">            Path eventFilePath = dirPath.resolve((Path) event.context());</span>
+<span class="nc bnc" id="L772" title="All 2 branches missed.">            if (filePath.equals(eventFilePath)) {</span>
+<span class="nc" id="L773">                shouldResetContext = true;</span>
+            }
+        }
+        // Note: we don't care about delete events
+<span class="nc bnc" id="L777" title="All 2 branches missed.">        if (shouldResetContext) {</span>
+<span class="nc" id="L778">            LOG.debug(</span>
+                &quot;Attempting to reset default SSL context after receiving watch event: {} with context: {}&quot;,
+<span class="nc" id="L780">                event.kind(),</span>
+<span class="nc" id="L781">                event.context());</span>
+            try {
+<span class="nc" id="L783">                this.resetDefaultSSLContextAndOptions();</span>
+<span class="nc" id="L784">            } catch (SSLContextException e) {</span>
+<span class="nc" id="L785">                throw new RuntimeException(e);</span>
+<span class="nc" id="L786">            }</span>
+        } else {
+<span class="nc" id="L788">            LOG.debug(</span>
+                &quot;Ignoring watch event and keeping previous default SSL context. Event kind: {} with context: {}&quot;,
+<span class="nc" id="L790">                event.kind(),</span>
+<span class="nc" id="L791">                event.context());</span>
+        }
+<span class="nc" id="L793">    }</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

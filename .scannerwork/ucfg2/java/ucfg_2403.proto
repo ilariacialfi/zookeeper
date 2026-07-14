@@ -1,0 +1,9 @@
+
+sorg.apache.zookeeper.server.RequestRecord#fromRecord(Ljava/lang/Record;)Lorg/apache/zookeeper/server/RequestRecord;W
+Mzookeeper-server/src/main/java/org/apache/zookeeper/server/RequestRecord.java$ $(#"1*!
+1%' %(-"
+% %(/
+"":&
+$$ $(1
+recordjava.lang.RecordB-"+
+)org.apache.zookeeper.server.RequestRecordH

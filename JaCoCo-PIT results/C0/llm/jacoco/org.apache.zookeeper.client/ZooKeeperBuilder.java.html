@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ZooKeeperBuilder.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.client</a> &gt; <span class="el_source">ZooKeeperBuilder.java</span></div><h1>ZooKeeperBuilder.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.client;
+
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.time.Duration;
+import java.util.Collection;
+import java.util.Objects;
+import java.util.function.Function;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.yetus.audience.InterfaceStability;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.admin.ZooKeeperAdmin;
+
+/**
+ * Builder to construct {@link ZooKeeper} and {@link ZooKeeperAdmin}.
+ */
+@InterfaceAudience.Public
+@InterfaceStability.Evolving
+public class ZooKeeperBuilder {
+    private final String connectString;
+    private final Duration sessionTimeout;
+<span class="nc" id="L42">    private Duration newSessionTimeout = Duration.ofSeconds(Long.MAX_VALUE, 999_999_999L);</span>
+    private Function&lt;Collection&lt;InetSocketAddress&gt;, HostProvider&gt; hostProvider;
+    private Watcher defaultWatcher;
+<span class="nc" id="L45">    private boolean canBeReadOnly = false;</span>
+<span class="nc" id="L46">    private long sessionId = 0;</span>
+    private byte[] sessionPasswd;
+    private ZKClientConfig clientConfig;
+
+    /**
+     * This is private and export for internal usage. Use {@link ZooKeeper#builder(String, Duration)} instead.
+     */
+    @InterfaceAudience.Private
+<span class="nc" id="L54">    public ZooKeeperBuilder(String connectString, Duration sessionTimeout) {</span>
+<span class="nc" id="L55">        this.connectString = Objects.requireNonNull(connectString, &quot;connect string must not be null&quot;);</span>
+<span class="nc" id="L56">        this.sessionTimeout = Objects.requireNonNull(sessionTimeout, &quot;session timeout must not be null&quot;);</span>
+<span class="nc" id="L57">    }</span>
+
+    /**
+     * Specified watcher to receive state changes, and node events if attached later.
+     *
+     * @param watcher
+     *            a watcher object which will be notified of state changes, may
+     *            also be notified for node events
+     * @return this
+     */
+    public ZooKeeperBuilder withDefaultWatcher(Watcher watcher) {
+<span class="nc" id="L68">        this.defaultWatcher = watcher;</span>
+<span class="nc" id="L69">        return this;</span>
+    }
+
+    /**
+     * Specifies a function to construct a {@link HostProvider} with initial server addresses from connect string.
+     *
+     * @param hostProvider
+     *            use this as HostProvider to enable custom behaviour.
+     * @return this
+     */
+    public ZooKeeperBuilder withHostProvider(Function&lt;Collection&lt;InetSocketAddress&gt;, HostProvider&gt; hostProvider) {
+<span class="nc" id="L80">        this.hostProvider = hostProvider;</span>
+<span class="nc" id="L81">        return this;</span>
+    }
+
+    /**
+     * Specifies whether the created client is allowed to go to read-only mode in case of partitioning.
+     *
+     * @param canBeReadOnly
+     *            whether the created client is allowed to go to
+     *            read-only mode in case of partitioning. Read-only mode
+     *            basically means that if the client can't find any majority
+     *            servers but there's partitioned server it could reach, it
+     *            connects to one in read-only mode, i.e. read requests are
+     *            allowed while write requests are not. It continues seeking for
+     *            majority in the background.
+     * @return this
+     * @since 3.4
+     */
+    public ZooKeeperBuilder withCanBeReadOnly(boolean canBeReadOnly) {
+<span class="nc" id="L99">        this.canBeReadOnly = canBeReadOnly;</span>
+<span class="nc" id="L100">        return this;</span>
+    }
+
+    /**
+     * Specifies session id and password in session reestablishment.
+     *
+     * @param sessionId
+     *            session id to use if reconnecting, otherwise 0 to open new session
+     * @param sessionPasswd
+     *            password for this session
+     * @return this
+     * @see ZooKeeper#getSessionId()
+     * @see ZooKeeper#getSessionPasswd()
+     */
+    @SuppressFBWarnings({&quot;EI_EXPOSE_REP&quot;, &quot;EI_EXPOSE_REP2&quot;})
+    public ZooKeeperBuilder withSession(long sessionId, byte[] sessionPasswd) {
+<span class="nc" id="L116">        this.sessionId = sessionId;</span>
+<span class="nc" id="L117">        this.sessionPasswd = sessionPasswd;</span>
+<span class="nc" id="L118">        return this;</span>
+    }
+
+    /**
+     * Specifies timeout to establish a brand-new session.
+     *
+     * @param timeout timeout to get {@link org.apache.zookeeper.Watcher.Event.KeeperState#Expired} in establishing a
+     *                brand-new session. {@code Duration.ofSeconds(Long.MAX_VALUE, 999_999_999L)}, which is the default,
+     *                means endless retry until connected. {@code Duration.ZERO} means a sensible value deduced from
+     *                specified session timeout, currently, it is approximate {@code sessionTimeout * 4 / 3}.
+     * @return this
+     * @since 3.10.0
+     */
+    public ZooKeeperBuilder withNewSessionTimeout(Duration timeout) {
+<span class="nc" id="L132">        this.newSessionTimeout = timeout;</span>
+<span class="nc" id="L133">        return this;</span>
+    }
+
+    /**
+     * Specifies the client config used to construct ZooKeeper instances.
+     *
+     * @param clientConfig
+     *            passing this conf object gives each client the flexibility of
+     *            configuring properties differently compared to other instances
+     * @return this
+     * @since 3.5.2
+     */
+    public ZooKeeperBuilder withClientConfig(ZKClientConfig clientConfig) {
+<span class="nc" id="L146">        this.clientConfig = clientConfig;</span>
+<span class="nc" id="L147">        return this;</span>
+    }
+
+    /**
+     * Creates a {@link ZooKeeperOptions} with configured options.
+     *
+     * &lt;p&gt;This is private and export for internal usage.
+     *
+     * @apiNote helper to delegate existing constructors to {@link ZooKeeper#ZooKeeper(ZooKeeperOptions)}
+     */
+    @InterfaceAudience.Private
+    public ZooKeeperOptions toOptions() {
+<span class="nc" id="L159">        return new ZooKeeperOptions(</span>
+            connectString,
+            sessionTimeout,
+            newSessionTimeout,
+            defaultWatcher,
+            hostProvider,
+            canBeReadOnly,
+            sessionId,
+            sessionPasswd,
+            clientConfig
+        );
+    }
+
+    /**
+     * Constructs an instance of {@link ZooKeeper}.
+     *
+     * @return an instance of {@link ZooKeeper}
+     * @throws IOException from constructor of {@link ZooKeeper}
+     */
+    public ZooKeeper build() throws IOException {
+<span class="nc" id="L179">        return new ZooKeeper(toOptions());</span>
+    }
+
+    /**
+     * Constructs an instance of {@link ZooKeeperAdmin}.
+     *
+     * @return an instance of {@link ZooKeeperAdmin}
+     * @throws IOException from constructor of {@link ZooKeeperAdmin}
+     */
+    public ZooKeeperAdmin buildAdmin() throws IOException {
+<span class="nc" id="L189">        return new ZooKeeperAdmin(toOptions());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

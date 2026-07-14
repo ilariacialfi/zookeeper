@@ -1,0 +1,403 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JettyAdminServer.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server.admin</a> &gt; <span class="el_source">JettyAdminServer.java</span></div><h1>JettyAdminServer.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server.admin;
+
+import java.io.IOException;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import org.apache.zookeeper.common.QuorumX509Util;
+import org.apache.zookeeper.common.SecretUtils;
+import org.apache.zookeeper.common.X509Util;
+import org.apache.zookeeper.server.ZooKeeperServer;
+import org.apache.zookeeper.server.auth.IPAuthenticationProvider;
+import org.eclipse.jetty.http.HttpHeader;
+import org.eclipse.jetty.http.HttpVersion;
+import org.eclipse.jetty.security.ConstraintMapping;
+import org.eclipse.jetty.security.ConstraintSecurityHandler;
+import org.eclipse.jetty.server.HttpConfiguration;
+import org.eclipse.jetty.server.HttpConnectionFactory;
+import org.eclipse.jetty.server.SecureRequestCustomizer;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.server.SslConnectionFactory;
+import org.eclipse.jetty.servlet.ServletContextHandler;
+import org.eclipse.jetty.servlet.ServletHolder;
+import org.eclipse.jetty.util.security.Constraint;
+import org.eclipse.jetty.util.ssl.SslContextFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * This class encapsulates a Jetty server for running Commands.
+ *
+ * Given the default settings, start a ZooKeeper server and visit
+ * http://hostname:8080/commands for links to all registered commands. Visiting
+ * http://hostname:8080/commands/commandname will execute the associated
+ * Command and return the result in the body of the response. Any keyword
+ * arguments to the command are specified with URL parameters (e.g.,
+ * http://localhost:8080/commands/set_trace_mask?traceMask=306).
+ *
+ * @see Commands
+ * @see CommandOutputter
+ */
+public class JettyAdminServer implements AdminServer {
+
+<span class="nc" id="L69">    static final Logger LOG = LoggerFactory.getLogger(JettyAdminServer.class);</span>
+
+    public static final int DEFAULT_PORT = 8080;
+    public static final int DEFAULT_IDLE_TIMEOUT = 30000;
+    public static final String DEFAULT_COMMAND_URL = &quot;/commands&quot;;
+    private static final String DEFAULT_ADDRESS = &quot;0.0.0.0&quot;;
+    public static final int DEFAULT_STS_MAX_AGE = 1 * 24 * 60 * 60;  // seconds in a day
+    public static final int DEFAULT_HTTP_VERSION = 11;  // based on HttpVersion.java in jetty
+
+    private final Server server;
+    private final String address;
+    private final int port;
+    private final int idleTimeout;
+    private final String commandUrl;
+    private ZooKeeperServer zkServer;
+
+    public JettyAdminServer() throws AdminServerException, IOException, GeneralSecurityException {
+<span class="nc" id="L86">        this(</span>
+<span class="nc" id="L87">            System.getProperty(&quot;zookeeper.admin.serverAddress&quot;, DEFAULT_ADDRESS),</span>
+<span class="nc" id="L88">            Integer.getInteger(&quot;zookeeper.admin.serverPort&quot;, DEFAULT_PORT),</span>
+<span class="nc" id="L89">            Integer.getInteger(&quot;zookeeper.admin.idleTimeout&quot;, DEFAULT_IDLE_TIMEOUT),</span>
+<span class="nc" id="L90">            System.getProperty(&quot;zookeeper.admin.commandURL&quot;, DEFAULT_COMMAND_URL),</span>
+<span class="nc" id="L91">            Integer.getInteger(&quot;zookeeper.admin.httpVersion&quot;, DEFAULT_HTTP_VERSION),</span>
+<span class="nc" id="L92">            Boolean.getBoolean(&quot;zookeeper.admin.portUnification&quot;),</span>
+<span class="nc" id="L93">            Boolean.getBoolean(&quot;zookeeper.admin.forceHttps&quot;),</span>
+<span class="nc" id="L94">            Boolean.getBoolean(&quot;zookeeper.admin.needClientAuth&quot;));</span>
+<span class="nc" id="L95">    }</span>
+
+    public JettyAdminServer(
+        String address,
+        int port,
+        int timeout,
+        String commandUrl,
+        int httpVersion,
+        boolean portUnification,
+        boolean forceHttps,
+<span class="nc" id="L105">        boolean needClientAuth) throws IOException, GeneralSecurityException {</span>
+
+<span class="nc" id="L107">        this.port = port;</span>
+<span class="nc" id="L108">        this.idleTimeout = timeout;</span>
+<span class="nc" id="L109">        this.commandUrl = commandUrl;</span>
+<span class="nc" id="L110">        this.address = address;</span>
+
+<span class="nc" id="L112">        server = new Server();</span>
+<span class="nc" id="L113">        ServerConnector connector = null;</span>
+
+<span class="nc bnc" id="L115" title="All 4 branches missed.">        if (!portUnification &amp;&amp; !forceHttps) {</span>
+<span class="nc" id="L116">            connector = new ServerConnector(server);</span>
+        } else {
+<span class="nc" id="L118">            SecureRequestCustomizer customizer = new SecureRequestCustomizer();</span>
+<span class="nc" id="L119">            customizer.setStsMaxAge(DEFAULT_STS_MAX_AGE);</span>
+<span class="nc" id="L120">            customizer.setStsIncludeSubDomains(true);</span>
+
+<span class="nc" id="L122">            HttpConfiguration config = new HttpConfiguration();</span>
+<span class="nc" id="L123">            config.setSecureScheme(&quot;https&quot;);</span>
+<span class="nc" id="L124">            config.addCustomizer(customizer);</span>
+
+<span class="nc" id="L126">            try (QuorumX509Util x509Util = new QuorumX509Util()) {</span>
+<span class="nc" id="L127">                String privateKeyType = System.getProperty(x509Util.getSslKeystoreTypeProperty(), &quot;&quot;);</span>
+<span class="nc" id="L128">                String privateKeyPath = System.getProperty(x509Util.getSslKeystoreLocationProperty(), &quot;&quot;);</span>
+<span class="nc" id="L129">                String privateKeyPassword = getPasswordFromSystemPropertyOrFile(</span>
+<span class="nc" id="L130">                        x509Util.getSslKeystorePasswdProperty(),</span>
+<span class="nc" id="L131">                        x509Util.getSslKeystorePasswdPathProperty());</span>
+
+<span class="nc" id="L133">                String certAuthType = System.getProperty(x509Util.getSslTruststoreTypeProperty(), &quot;&quot;);</span>
+<span class="nc" id="L134">                String certAuthPath = System.getProperty(x509Util.getSslTruststoreLocationProperty(), &quot;&quot;);</span>
+<span class="nc" id="L135">                String certAuthPassword = getPasswordFromSystemPropertyOrFile(</span>
+<span class="nc" id="L136">                        x509Util.getSslTruststorePasswdProperty(),</span>
+<span class="nc" id="L137">                        x509Util.getSslTruststorePasswdPathProperty());</span>
+<span class="nc" id="L138">                KeyStore keyStore = null, trustStore = null;</span>
+
+                try {
+<span class="nc" id="L141">                    keyStore = X509Util.loadKeyStore(privateKeyPath, privateKeyPassword, privateKeyType);</span>
+<span class="nc" id="L142">                    trustStore = X509Util.loadTrustStore(certAuthPath, certAuthPassword, certAuthType);</span>
+<span class="nc" id="L143">                    LOG.info(&quot;Successfully loaded private key from {}&quot;, privateKeyPath);</span>
+<span class="nc" id="L144">                    LOG.info(&quot;Successfully loaded certificate authority from {}&quot;, certAuthPath);</span>
+<span class="nc" id="L145">                } catch (Exception e) {</span>
+<span class="nc" id="L146">                    LOG.error(&quot;Failed to load authentication certificates for admin server.&quot;, e);</span>
+<span class="nc" id="L147">                    throw e;</span>
+<span class="nc" id="L148">                }</span>
+
+<span class="nc" id="L150">                SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();</span>
+<span class="nc" id="L151">                sslContextFactory.setKeyStore(keyStore);</span>
+<span class="nc" id="L152">                sslContextFactory.setKeyStorePassword(privateKeyPassword);</span>
+<span class="nc" id="L153">                sslContextFactory.setTrustStore(trustStore);</span>
+<span class="nc" id="L154">                sslContextFactory.setTrustStorePassword(certAuthPassword);</span>
+<span class="nc" id="L155">                sslContextFactory.setNeedClientAuth(needClientAuth);</span>
+
+<span class="nc" id="L157">                String enabledProtocols = System.getProperty(x509Util.getSslEnabledProtocolsProperty());</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">                if (enabledProtocols != null) {</span>
+<span class="nc" id="L159">                    LOG.debug(&quot;Setting enabled protocols: '{}'&quot;, enabledProtocols);</span>
+<span class="nc" id="L160">                    String[] enabledProtocolsArray = enabledProtocols.split(&quot;,&quot;);</span>
+<span class="nc" id="L161">                    sslContextFactory.setIncludeProtocols(enabledProtocolsArray);</span>
+                }
+
+<span class="nc" id="L164">                String sslCipherSuites = System.getProperty(x509Util.getSslCipherSuitesProperty());</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">                if (sslCipherSuites != null) {</span>
+<span class="nc" id="L166">                    LOG.debug(&quot;Setting enabled cipherSuites: '{}'&quot;, sslCipherSuites);</span>
+<span class="nc" id="L167">                    String[] cipherSuitesArray = sslCipherSuites.split(&quot;,&quot;);</span>
+<span class="nc" id="L168">                    sslContextFactory.setIncludeCipherSuites(cipherSuitesArray);</span>
+                }
+
+<span class="nc bnc" id="L171" title="All 2 branches missed.">                if (forceHttps) {</span>
+<span class="nc" id="L172">                    connector = new ServerConnector(server,</span>
+<span class="nc" id="L173">                            new SslConnectionFactory(sslContextFactory, HttpVersion.fromVersion(httpVersion).asString()),</span>
+                            new HttpConnectionFactory(config));
+                } else {
+<span class="nc" id="L176">                    connector = new ServerConnector(</span>
+                            server,
+<span class="nc" id="L178">                            new UnifiedConnectionFactory(sslContextFactory, HttpVersion.fromVersion(httpVersion).asString()),</span>
+                            new HttpConnectionFactory(config));
+                }
+            }
+        }
+
+<span class="nc" id="L184">        connector.setHost(address);</span>
+<span class="nc" id="L185">        connector.setPort(port);</span>
+<span class="nc" id="L186">        connector.setIdleTimeout(idleTimeout);</span>
+
+<span class="nc" id="L188">        server.addConnector(connector);</span>
+
+<span class="nc" id="L190">        ServletContextHandler context = new ServletContextHandler(ServletContextHandler.SESSIONS);</span>
+<span class="nc" id="L191">        context.setContextPath(&quot;/*&quot;);</span>
+<span class="nc" id="L192">        constrainTraceMethod(context);</span>
+<span class="nc" id="L193">        server.setHandler(context);</span>
+
+<span class="nc" id="L195">        context.addServlet(new ServletHolder(new CommandServlet()), commandUrl + &quot;/*&quot;);</span>
+<span class="nc" id="L196">    }</span>
+
+    /**
+     * Start the embedded Jetty server.
+     */
+    @Override
+    public void start() throws AdminServerException {
+        try {
+<span class="nc" id="L204">            server.start();</span>
+<span class="nc" id="L205">        } catch (Exception e) {</span>
+            // Server.start() only throws Exception, so let's at least wrap it
+            // in an identifiable subclass
+<span class="nc" id="L208">            String message = String.format(</span>
+                &quot;Problem starting AdminServer on address %s, port %d and command URL %s&quot;,
+                address,
+<span class="nc" id="L211">                port,</span>
+                commandUrl);
+<span class="nc" id="L213">            throw new AdminServerException(message, e);</span>
+<span class="nc" id="L214">        }</span>
+<span class="nc" id="L215">        LOG.info(&quot;Started AdminServer on address {}, port {} and command URL {}&quot;, address, port, commandUrl);</span>
+<span class="nc" id="L216">    }</span>
+
+    /**
+     * Stop the embedded Jetty server.
+     *
+     * This is not very important except for tests where multiple
+     * JettyAdminServers are started and may try to bind to the same ports if
+     * previous servers aren't shut down.
+     */
+    @Override
+    public void shutdown() throws AdminServerException {
+        try {
+<span class="nc" id="L228">            server.stop();</span>
+<span class="nc" id="L229">        } catch (Exception e) {</span>
+<span class="nc" id="L230">            String message = String.format(</span>
+                &quot;Problem stopping AdminServer on address %s, port %d and command URL %s&quot;,
+                address,
+<span class="nc" id="L233">                port,</span>
+                commandUrl);
+<span class="nc" id="L235">            throw new AdminServerException(message, e);</span>
+<span class="nc" id="L236">        }</span>
+<span class="nc" id="L237">    }</span>
+
+    /**
+     * Set the ZooKeeperServer that will be used to run Commands.
+     *
+     * It is not necessary to set the ZK server before calling
+     * AdminServer.start(), and the ZK server can be set to null when, e.g.,
+     * that server is being shut down. If the ZK server is not set or set to
+     * null, the AdminServer will still be able to issue Commands, but they will
+     * return an error until a ZK server is set.
+     */
+    @Override
+    public void setZooKeeperServer(ZooKeeperServer zkServer) {
+<span class="nc" id="L250">        this.zkServer = zkServer;</span>
+<span class="nc" id="L251">    }</span>
+
+<span class="nc" id="L253">    private class CommandServlet extends HttpServlet {</span>
+
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        protected void doGet(
+            HttpServletRequest request,
+            HttpServletResponse response) throws ServletException, IOException {
+            // Capture the command name from the URL
+<span class="nc" id="L262">            String cmd = request.getPathInfo();</span>
+<span class="nc bnc" id="L263" title="All 4 branches missed.">            if (cmd == null || cmd.equals(&quot;/&quot;)) {</span>
+                // No command specified, print links to all commands instead
+<span class="nc bnc" id="L265" title="All 2 branches missed.">                for (String link : commandLinks()) {</span>
+<span class="nc" id="L266">                    response.getWriter().println(link);</span>
+<span class="nc" id="L267">                    response.getWriter().println(&quot;&lt;br/&gt;&quot;);</span>
+<span class="nc" id="L268">                }</span>
+<span class="nc" id="L269">                return;</span>
+            }
+            // Strip leading &quot;/&quot;
+<span class="nc" id="L272">            cmd = cmd.substring(1);</span>
+
+            // Extract keyword arguments to command from request parameters
+<span class="nc" id="L275">            @SuppressWarnings(&quot;unchecked&quot;) Map&lt;String, String[]&gt; parameterMap = request.getParameterMap();</span>
+<span class="nc" id="L276">            Map&lt;String, String&gt; kwargs = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">            for (Map.Entry&lt;String, String[]&gt; entry : parameterMap.entrySet()) {</span>
+<span class="nc" id="L278">                kwargs.put(entry.getKey(), entry.getValue()[0]);</span>
+<span class="nc" id="L279">            }</span>
+<span class="nc" id="L280">            final String authInfo = request.getHeader(HttpHeader.AUTHORIZATION.asString());</span>
+
+            // Run the command
+<span class="nc" id="L283">            final CommandResponse cmdResponse = Commands.runGetCommand(cmd, zkServer, kwargs, authInfo, request);</span>
+<span class="nc" id="L284">            response.setStatus(cmdResponse.getStatusCode());</span>
+
+<span class="nc" id="L286">            final Map&lt;String, String&gt; headers = cmdResponse.getHeaders();</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">            for (final Map.Entry&lt;String, String&gt; header : headers.entrySet()) {</span>
+<span class="nc" id="L288">                response.addHeader(header.getKey(), header.getValue());</span>
+<span class="nc" id="L289">            }</span>
+<span class="nc" id="L290">            final String clientIP = IPAuthenticationProvider.getClientIPAddress(request);</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">            if (cmdResponse.getInputStream() == null) {</span>
+                // Format and print the output of the command
+<span class="nc" id="L293">                CommandOutputter outputter = new JsonOutputter(clientIP);</span>
+<span class="nc" id="L294">                response.setContentType(outputter.getContentType());</span>
+<span class="nc" id="L295">                outputter.output(cmdResponse, response.getWriter());</span>
+<span class="nc" id="L296">            } else {</span>
+                // Stream out the output of the command
+<span class="nc" id="L298">                CommandOutputter outputter = new StreamOutputter(clientIP);</span>
+<span class="nc" id="L299">                response.setContentType(outputter.getContentType());</span>
+<span class="nc" id="L300">                outputter.output(cmdResponse, response.getOutputStream());</span>
+            }
+<span class="nc" id="L302">        }</span>
+
+        /**
+         * Serves HTTP POST requests. It reads request payload as raw data.
+         * It's up to each command to process the payload accordingly.
+         * For example, RestoreCommand uses the payload InputStream directly
+         * to read snapshot data.
+         */
+        @Override
+        protected void doPost(final HttpServletRequest request,
+                              final HttpServletResponse response) throws ServletException, IOException {
+<span class="nc" id="L313">            final String cmdName = extractCommandNameFromURL(request, response);</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">            if (cmdName != null) {</span>
+<span class="nc" id="L315">                final String authInfo = request.getHeader(HttpHeader.AUTHORIZATION.asString());</span>
+<span class="nc" id="L316">                final CommandResponse cmdResponse = Commands.runPostCommand(cmdName, zkServer, request.getInputStream(), authInfo, request);</span>
+<span class="nc" id="L317">                final String clientIP = IPAuthenticationProvider.getClientIPAddress(request);</span>
+<span class="nc" id="L318">                sendJSONResponse(response, cmdResponse, clientIP);</span>
+            }
+<span class="nc" id="L320">        }</span>
+
+        /**
+         * Extracts the command name from URL if it exists otherwise null
+         */
+        private String extractCommandNameFromURL(final HttpServletRequest request,
+                                                 final HttpServletResponse response) throws IOException {
+<span class="nc" id="L327">            String cmd = request.getPathInfo();</span>
+<span class="nc bnc" id="L328" title="All 4 branches missed.">            if (cmd == null || cmd.equals(&quot;/&quot;)) {</span>
+<span class="nc" id="L329">                printCommandLinks(response);</span>
+<span class="nc" id="L330">                return null;</span>
+            }
+            // Strip leading &quot;/&quot;
+<span class="nc" id="L333">            return cmd.substring(1);</span>
+        }
+
+        /**
+         * Prints the list of URLs to each registered command as response.
+         */
+        private void printCommandLinks(final HttpServletResponse response) throws IOException {
+<span class="nc bnc" id="L340" title="All 2 branches missed.">            for (final String link : commandLinks()) {</span>
+<span class="nc" id="L341">                response.getWriter().println(link);</span>
+<span class="nc" id="L342">                response.getWriter().println(&quot;&lt;br/&gt;&quot;);</span>
+<span class="nc" id="L343">            }</span>
+<span class="nc" id="L344">        }</span>
+
+        /**
+         * Send JSON string as the response.
+         */
+        private void sendJSONResponse(final HttpServletResponse response,
+                                      final CommandResponse cmdResponse,
+                                      final String clientIP) throws IOException {
+<span class="nc" id="L352">            final CommandOutputter outputter = new JsonOutputter(clientIP);</span>
+
+<span class="nc" id="L354">            response.setStatus(cmdResponse.getStatusCode());</span>
+<span class="nc" id="L355">            response.setContentType(outputter.getContentType());</span>
+<span class="nc" id="L356">            outputter.output(cmdResponse, response.getWriter());</span>
+<span class="nc" id="L357">        }</span>
+    }
+
+    /**
+     * Returns a list of URLs to each registered Command.
+     */
+    private List&lt;String&gt; commandLinks() {
+<span class="nc" id="L364">        return Commands.getPrimaryNames().stream().sorted().map(command -&gt; String.format(&quot;&lt;a href=\&quot;%s\&quot;&gt;%s&lt;/a&gt;&quot;, commandUrl + &quot;/&quot; + command , command)).collect(Collectors.toList());</span>
+    }
+
+    /**
+     * Add constraint to a given context to disallow TRACE method
+     * @param ctxHandler the context to modify
+     */
+    private void constrainTraceMethod(ServletContextHandler ctxHandler) {
+<span class="nc" id="L372">        Constraint c = new Constraint();</span>
+<span class="nc" id="L373">        c.setAuthenticate(true);</span>
+
+<span class="nc" id="L375">        ConstraintMapping cmt = new ConstraintMapping();</span>
+<span class="nc" id="L376">        cmt.setConstraint(c);</span>
+<span class="nc" id="L377">        cmt.setMethod(&quot;TRACE&quot;);</span>
+<span class="nc" id="L378">        cmt.setPathSpec(&quot;/*&quot;);</span>
+
+<span class="nc" id="L380">        ConstraintSecurityHandler securityHandler = new ConstraintSecurityHandler();</span>
+<span class="nc" id="L381">        securityHandler.setConstraintMappings(new ConstraintMapping[] {cmt});</span>
+
+<span class="nc" id="L383">        ctxHandler.setSecurityHandler(securityHandler);</span>
+<span class="nc" id="L384">    }</span>
+
+    /**
+     * Returns the password specified by the given property or stored in the file specified by the
+     * given path property. If both are specified, the password stored in the file will be returned.
+     * @param propertyName the name of the property
+     * @param pathPropertyName the name of the path property
+     * @return password value
+     */
+    private String getPasswordFromSystemPropertyOrFile(final String propertyName,
+                                                       final String pathPropertyName) {
+<span class="nc" id="L395">        String value = System.getProperty(propertyName, &quot;&quot;);</span>
+<span class="nc" id="L396">        final String pathValue = System.getProperty(pathPropertyName, &quot;&quot;);</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">        if (!pathValue.isEmpty()) {</span>
+<span class="nc" id="L398">            value = String.valueOf(SecretUtils.readSecret(pathValue));</span>
+        }
+<span class="nc" id="L400">        return value;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

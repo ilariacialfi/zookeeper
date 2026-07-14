@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: org.apache.zookeeper.test.randoop.c3.commandresponse.RegressionTest3
+-------------------------------------------------------------------------------
+Tests run: 103, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.498 s - in org.apache.zookeeper.test.randoop.c3.commandresponse.RegressionTest3

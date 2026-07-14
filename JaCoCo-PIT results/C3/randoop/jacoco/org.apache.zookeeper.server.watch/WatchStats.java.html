@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WatchStats.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server.watch</a> &gt; <span class="el_source">WatchStats.java</span></div><h1>WatchStats.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server.watch;
+
+/**
+ * Statistics for multiple different watches on one node.
+ */
+public final class WatchStats {
+<span class="nc" id="L25">    private static final WatchStats[] WATCH_STATS = new WatchStats[] {</span>
+            new WatchStats(0), // NONE
+            new WatchStats(1), // STANDARD
+            new WatchStats(2), // PERSISTENT
+            new WatchStats(3), // STANDARD + PERSISTENT
+            new WatchStats(4), // PERSISTENT_RECURSIVE
+            new WatchStats(5), // STANDARD + PERSISTENT_RECURSIVE
+            new WatchStats(6), // PERSISTENT + PERSISTENT_RECURSIVE
+            new WatchStats(7), // STANDARD + PERSISTENT + PERSISTENT_RECURSIVE
+    };
+
+    /**
+     * Stats that have no watchers attached.
+     *
+     * &lt;p&gt;This could be used as start point to compute new stats using {@link #addMode(WatcherMode)}.
+     */
+<span class="nc" id="L41">    public static final WatchStats NONE = WATCH_STATS[0];</span>
+
+    private final int flags;
+
+<span class="nc" id="L45">    private WatchStats(int flags) {</span>
+<span class="nc" id="L46">        this.flags = flags;</span>
+<span class="nc" id="L47">    }</span>
+
+    private static int modeToFlag(WatcherMode mode) {
+<span class="nc" id="L50">        return 1 &lt;&lt; mode.ordinal();</span>
+    }
+
+    /**
+     * Compute stats after given mode attached to node.
+     *
+     * @param mode watcher mode
+     * @return a new stats if given mode is not attached to this node before, otherwise old stats
+     */
+    public WatchStats addMode(WatcherMode mode) {
+<span class="nc" id="L60">        int flags = this.flags | modeToFlag(mode);</span>
+<span class="nc" id="L61">        return WATCH_STATS[flags];</span>
+    }
+
+    /**
+     * Compute stats after given mode removed from node.
+     *
+     * @param mode watcher mode
+     * @return null if given mode is the last attached mode, otherwise a new stats
+     */
+    public WatchStats removeMode(WatcherMode mode) {
+<span class="nc" id="L71">        int mask = ~modeToFlag(mode);</span>
+<span class="nc" id="L72">        int flags = this.flags &amp; mask;</span>
+<span class="nc bnc" id="L73" title="All 2 branches missed.">        if (flags == 0) {</span>
+<span class="nc" id="L74">            return NONE;</span>
+        }
+<span class="nc" id="L76">        return WATCH_STATS[flags];</span>
+    }
+
+    /**
+     * Check whether given mode is attached to this node.
+     *
+     * @param mode watcher mode
+     * @return true if given mode is attached to this node.
+     */
+    public boolean hasMode(WatcherMode mode) {
+<span class="nc" id="L86">        int flags = modeToFlag(mode);</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">        return (this.flags &amp; flags) != 0;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

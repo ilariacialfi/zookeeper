@@ -1,0 +1,623 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ServerMetrics.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server</a> &gt; <span class="el_source">ServerMetrics.java</span></div><h1>ServerMetrics.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server;
+
+import org.apache.zookeeper.metrics.Counter;
+import org.apache.zookeeper.metrics.CounterSet;
+import org.apache.zookeeper.metrics.MetricsContext;
+import org.apache.zookeeper.metrics.MetricsContext.DetailLevel;
+import org.apache.zookeeper.metrics.MetricsProvider;
+import org.apache.zookeeper.metrics.Summary;
+import org.apache.zookeeper.metrics.SummarySet;
+import org.apache.zookeeper.metrics.impl.DefaultMetricsProvider;
+import org.apache.zookeeper.metrics.impl.NullMetricsProvider;
+import org.apache.zookeeper.server.util.QuotaMetricsUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public final class ServerMetrics {
+
+<span class="nc" id="L36">    private static final Logger LOG = LoggerFactory.getLogger(ServerMetrics.class);</span>
+
+    /**
+     * Dummy instance useful for tests.
+     */
+<span class="nc" id="L41">    public static final ServerMetrics NULL_METRICS = new ServerMetrics(NullMetricsProvider.INSTANCE);</span>
+
+    /**
+     * Dummy instance useful for tests.
+     */
+<span class="nc" id="L46">    public static final ServerMetrics DEFAULT_METRICS_FOR_TESTS = new ServerMetrics(new DefaultMetricsProvider());</span>
+
+    /**
+     * Real instance used for tracking server side metrics. The final value is
+     * assigned after the {@link MetricsProvider} bootstrap.
+     */
+<span class="nc" id="L52">    private static volatile ServerMetrics CURRENT = DEFAULT_METRICS_FOR_TESTS;</span>
+
+    /**
+     * Access current ServerMetrics.
+     *
+     * @return a reference to the current Metrics
+     */
+    public static ServerMetrics getMetrics() {
+<span class="nc" id="L60">        return CURRENT;</span>
+    }
+
+    public static void metricsProviderInitialized(MetricsProvider metricsProvider) {
+<span class="nc" id="L64">        LOG.info(&quot;ServerMetrics initialized with provider {}&quot;, metricsProvider);</span>
+<span class="nc" id="L65">        CURRENT = new ServerMetrics(metricsProvider);</span>
+<span class="nc" id="L66">    }</span>
+
+<span class="nc" id="L68">    private ServerMetrics(MetricsProvider metricsProvider) {</span>
+<span class="nc" id="L69">        this.metricsProvider = metricsProvider;</span>
+<span class="nc" id="L70">        MetricsContext metricsContext = this.metricsProvider.getRootContext();</span>
+
+<span class="nc" id="L72">        FSYNC_TIME = metricsContext.getSummary(&quot;fsynctime&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L74">        SNAPSHOT_TIME = metricsContext.getSummary(&quot;snapshottime&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L75">        SNAPSHOT_ERROR_COUNT = metricsContext.getCounter(&quot;snapshot_error_count&quot;);</span>
+<span class="nc" id="L76">        SNAPSHOT_RATE_LIMITED_COUNT = metricsContext.getCounter(&quot;snapshot_rate_limited_count&quot;);</span>
+<span class="nc" id="L77">        RESTORE_TIME = metricsContext.getSummary(&quot;restore_time&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L78">        RESTORE_ERROR_COUNT = metricsContext.getCounter(&quot;restore_error_count&quot;);</span>
+<span class="nc" id="L79">        RESTORE_RATE_LIMITED_COUNT = metricsContext.getCounter(&quot;restore_rate_limited_count&quot;);</span>
+<span class="nc" id="L80">        DB_INIT_TIME = metricsContext.getSummary(&quot;dbinittime&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L81">        READ_LATENCY = metricsContext.getSummary(&quot;readlatency&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L82">        UPDATE_LATENCY = metricsContext.getSummary(&quot;updatelatency&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L83">        PROPAGATION_LATENCY = metricsContext.getSummary(&quot;propagation_latency&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L84">        FOLLOWER_SYNC_TIME = metricsContext.getSummary(&quot;follower_sync_time&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L85">        OBSERVER_SYNC_TIME = metricsContext.getSummary(&quot;observer_sync_time&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L86">        ELECTION_TIME = metricsContext.getSummary(&quot;election_time&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L87">        LOOKING_COUNT = metricsContext.getCounter(&quot;looking_count&quot;);</span>
+<span class="nc" id="L88">        DIFF_COUNT = metricsContext.getCounter(&quot;diff_count&quot;);</span>
+<span class="nc" id="L89">        SNAP_COUNT = metricsContext.getCounter(&quot;snap_count&quot;);</span>
+<span class="nc" id="L90">        COMMIT_COUNT = metricsContext.getCounter(&quot;commit_count&quot;);</span>
+<span class="nc" id="L91">        CONNECTION_REQUEST_COUNT = metricsContext.getCounter(&quot;connection_request_count&quot;);</span>
+<span class="nc" id="L92">        CONNECTION_TOKEN_DEFICIT = metricsContext.getSummary(&quot;connection_token_deficit&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L93">        CONNECTION_REJECTED = metricsContext.getCounter(&quot;connection_rejected&quot;);</span>
+
+<span class="nc" id="L95">        INFLIGHT_SNAP_COUNT = metricsContext.getSummary(&quot;inflight_snap_count&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L96">        INFLIGHT_DIFF_COUNT = metricsContext.getSummary(&quot;inflight_diff_count&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L98">        WRITE_PER_NAMESPACE = metricsContext.getSummarySet(&quot;write_per_namespace&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L99">        READ_PER_NAMESPACE = metricsContext.getSummarySet(&quot;read_per_namespace&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L101">        BYTES_RECEIVED_COUNT = metricsContext.getCounter(&quot;bytes_received_count&quot;);</span>
+<span class="nc" id="L102">        UNRECOVERABLE_ERROR_COUNT = metricsContext.getCounter(&quot;unrecoverable_error_count&quot;);</span>
+
+<span class="nc" id="L104">        NODE_CREATED_WATCHER = metricsContext.getSummary(&quot;node_created_watch_count&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L105">        NODE_DELETED_WATCHER = metricsContext.getSummary(&quot;node_deleted_watch_count&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L106">        NODE_CHANGED_WATCHER = metricsContext.getSummary(&quot;node_changed_watch_count&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L107">        NODE_CHILDREN_WATCHER = metricsContext.getSummary(&quot;node_children_watch_count&quot;, DetailLevel.BASIC);</span>
+
+        /*
+         * Number of dead watchers in DeadWatcherListener
+         */
+<span class="nc" id="L112">        ADD_DEAD_WATCHER_STALL_TIME = metricsContext.getCounter(&quot;add_dead_watcher_stall_time&quot;);</span>
+<span class="nc" id="L113">        DEAD_WATCHERS_QUEUED = metricsContext.getCounter(&quot;dead_watchers_queued&quot;);</span>
+<span class="nc" id="L114">        DEAD_WATCHERS_CLEARED = metricsContext.getCounter(&quot;dead_watchers_cleared&quot;);</span>
+<span class="nc" id="L115">        DEAD_WATCHERS_CLEANER_LATENCY = metricsContext.getSummary(&quot;dead_watchers_cleaner_latency&quot;, DetailLevel.ADVANCED);</span>
+
+<span class="nc" id="L117">        RESPONSE_PACKET_CACHE_HITS = metricsContext.getCounter(&quot;response_packet_cache_hits&quot;);</span>
+<span class="nc" id="L118">        RESPONSE_PACKET_CACHE_MISSING = metricsContext.getCounter(&quot;response_packet_cache_misses&quot;);</span>
+<span class="nc" id="L119">        RESPONSE_PACKET_GET_CHILDREN_CACHE_HITS = metricsContext.getCounter(&quot;response_packet_get_children_cache_hits&quot;);</span>
+<span class="nc" id="L120">        RESPONSE_PACKET_GET_CHILDREN_CACHE_MISSING = metricsContext.getCounter(&quot;response_packet_get_children_cache_misses&quot;);</span>
+
+<span class="nc" id="L122">        ENSEMBLE_AUTH_SUCCESS = metricsContext.getCounter(&quot;ensemble_auth_success&quot;);</span>
+
+<span class="nc" id="L124">        ENSEMBLE_AUTH_FAIL = metricsContext.getCounter(&quot;ensemble_auth_fail&quot;);</span>
+
+<span class="nc" id="L126">        ENSEMBLE_AUTH_SKIP = metricsContext.getCounter(&quot;ensemble_auth_skip&quot;);</span>
+
+<span class="nc" id="L128">        PREP_PROCESSOR_QUEUE_TIME = metricsContext.getSummary(&quot;prep_processor_queue_time_ms&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L129">        PREP_PROCESSOR_QUEUE_SIZE = metricsContext.getSummary(&quot;prep_processor_queue_size&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L130">        PREP_PROCESSOR_QUEUED = metricsContext.getCounter(&quot;prep_processor_request_queued&quot;);</span>
+<span class="nc" id="L131">        OUTSTANDING_CHANGES_QUEUED = metricsContext.getCounter(&quot;outstanding_changes_queued&quot;);</span>
+<span class="nc" id="L132">        OUTSTANDING_CHANGES_REMOVED = metricsContext.getCounter(&quot;outstanding_changes_removed&quot;);</span>
+<span class="nc" id="L133">        PREP_PROCESS_TIME = metricsContext.getSummary(&quot;prep_process_time&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L134">        PROPOSAL_PROCESS_TIME = metricsContext.getSummary(&quot;proposal_process_time&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L135">        CLOSE_SESSION_PREP_TIME = metricsContext.getSummary(&quot;close_session_prep_time&quot;, DetailLevel.ADVANCED);</span>
+
+<span class="nc" id="L137">        REVALIDATE_COUNT = metricsContext.getCounter(&quot;revalidate_count&quot;);</span>
+<span class="nc" id="L138">        CONNECTION_DROP_COUNT = metricsContext.getCounter(&quot;connection_drop_count&quot;);</span>
+<span class="nc" id="L139">        CONNECTION_REVALIDATE_COUNT = metricsContext.getCounter(&quot;connection_revalidate_count&quot;);</span>
+
+        // Expiry queue stats
+<span class="nc" id="L142">        SESSIONLESS_CONNECTIONS_EXPIRED = metricsContext.getCounter(&quot;sessionless_connections_expired&quot;);</span>
+<span class="nc" id="L143">        STALE_SESSIONS_EXPIRED = metricsContext.getCounter(&quot;stale_sessions_expired&quot;);</span>
+
+<span class="nc" id="L145">        UNAVAILABLE_TIME = metricsContext.getSummary(&quot;unavailable_time&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L146">        LEADER_UNAVAILABLE_TIME = metricsContext.getSummary(&quot;leader_unavailable_time&quot;, DetailLevel.BASIC);</span>
+
+        /*
+         * Number of requests that are in the session queue.
+         */
+<span class="nc" id="L151">        REQUESTS_IN_SESSION_QUEUE = metricsContext.getSummary(&quot;requests_in_session_queue&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L152">        PENDING_SESSION_QUEUE_SIZE = metricsContext.getSummary(&quot;pending_session_queue_size&quot;, DetailLevel.BASIC);</span>
+        /*
+         * Consecutive number of read requests that are in the session queue right after a commit request.
+         */
+<span class="nc" id="L156">        READS_AFTER_WRITE_IN_SESSION_QUEUE = metricsContext.getSummary(&quot;reads_after_write_in_session_queue&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L157">        READ_ISSUED_FROM_SESSION_QUEUE = metricsContext.getSummary(&quot;reads_issued_from_session_queue&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L158">        SESSION_QUEUES_DRAINED = metricsContext.getSummary(&quot;session_queues_drained&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L160">        TIME_WAITING_EMPTY_POOL_IN_COMMIT_PROCESSOR_READ = metricsContext.getSummary(&quot;time_waiting_empty_pool_in_commit_processor_read_ms&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L161">        WRITE_BATCH_TIME_IN_COMMIT_PROCESSOR = metricsContext.getSummary(&quot;write_batch_time_in_commit_processor&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L163">        CONCURRENT_REQUEST_PROCESSING_IN_COMMIT_PROCESSOR = metricsContext.getSummary(&quot;concurrent_request_processing_in_commit_processor&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L165">        READS_QUEUED_IN_COMMIT_PROCESSOR = metricsContext.getSummary(&quot;read_commit_proc_req_queued&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L166">        WRITES_QUEUED_IN_COMMIT_PROCESSOR = metricsContext.getSummary(&quot;write_commit_proc_req_queued&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L167">        COMMITS_QUEUED_IN_COMMIT_PROCESSOR = metricsContext.getSummary(&quot;commit_commit_proc_req_queued&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L168">        COMMITS_QUEUED = metricsContext.getCounter(&quot;request_commit_queued&quot;);</span>
+<span class="nc" id="L169">        READS_ISSUED_IN_COMMIT_PROC = metricsContext.getSummary(&quot;read_commit_proc_issued&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L170">        WRITES_ISSUED_IN_COMMIT_PROC = metricsContext.getSummary(&quot;write_commit_proc_issued&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L172">        THROTTLED_OPS = metricsContext.getCounter(&quot;throttled_ops&quot;);</span>
+
+        /**
+         * Time spent by a read request in the commit processor.
+         */
+<span class="nc" id="L177">        READ_COMMITPROC_TIME = metricsContext.getSummary(&quot;read_commitproc_time_ms&quot;, DetailLevel.ADVANCED);</span>
+
+        /**
+         * Time spent by a write request in the commit processor.
+         */
+<span class="nc" id="L182">        WRITE_COMMITPROC_TIME = metricsContext.getSummary(&quot;write_commitproc_time_ms&quot;, DetailLevel.ADVANCED);</span>
+
+        /**
+         * Time spent by a committed request, for a locally issued write, in the
+         * commit processor.
+         */
+<span class="nc" id="L188">        LOCAL_WRITE_COMMITTED_TIME = metricsContext.getSummary(&quot;local_write_committed_time_ms&quot;, DetailLevel.ADVANCED);</span>
+
+        /**
+         * Time spent by a committed request for a write, issued by other server, in the
+         * commit processor.
+         */
+<span class="nc" id="L194">        SERVER_WRITE_COMMITTED_TIME = metricsContext.getSummary(&quot;server_write_committed_time_ms&quot;, DetailLevel.ADVANCED);</span>
+
+<span class="nc" id="L196">        COMMIT_PROCESS_TIME = metricsContext.getSummary(&quot;commit_process_time&quot;, DetailLevel.BASIC);</span>
+
+        /**
+         * Observer Master processing metrics.
+         */
+<span class="nc" id="L201">        OM_PROPOSAL_PROCESS_TIME = metricsContext.getSummary(&quot;om_proposal_process_time_ms&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L202">        OM_COMMIT_PROCESS_TIME = metricsContext.getSummary(&quot;om_commit_process_time_ms&quot;, DetailLevel.ADVANCED);</span>
+
+        /**
+         * Time spent by the final processor. This is tracked in the commit processor.
+         */
+<span class="nc" id="L207">        READ_FINAL_PROC_TIME = metricsContext.getSummary(&quot;read_final_proc_time_ms&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L208">        WRITE_FINAL_PROC_TIME = metricsContext.getSummary(&quot;write_final_proc_time_ms&quot;, DetailLevel.ADVANCED);</span>
+
+<span class="nc" id="L210">        PROPOSAL_LATENCY = metricsContext.getSummary(&quot;proposal_latency&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L211">        PROPOSAL_ACK_CREATION_LATENCY = metricsContext.getSummary(&quot;proposal_ack_creation_latency&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L212">        COMMIT_PROPAGATION_LATENCY = metricsContext.getSummary(&quot;commit_propagation_latency&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L213">        LEARNER_PROPOSAL_RECEIVED_COUNT = metricsContext.getCounter(&quot;learner_proposal_received_count&quot;);</span>
+<span class="nc" id="L214">        LEARNER_COMMIT_RECEIVED_COUNT = metricsContext.getCounter(&quot;learner_commit_received_count&quot;);</span>
+
+        /**
+         * Learner handler quorum packet metrics.
+         */
+<span class="nc" id="L219">        LEARNER_HANDLER_QP_SIZE = metricsContext.getSummarySet(&quot;learner_handler_qp_size&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L220">        LEARNER_HANDLER_QP_TIME = metricsContext.getSummarySet(&quot;learner_handler_qp_time_ms&quot;, DetailLevel.ADVANCED);</span>
+
+<span class="nc" id="L222">        STARTUP_TXNS_LOADED = metricsContext.getSummary(&quot;startup_txns_loaded&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L223">        STARTUP_TXNS_LOAD_TIME = metricsContext.getSummary(&quot;startup_txns_load_time&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L224">        STARTUP_SNAP_LOAD_TIME = metricsContext.getSummary(&quot;startup_snap_load_time&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L226">        SYNC_PROCESSOR_QUEUE_AND_FLUSH_TIME = metricsContext.getSummary(&quot;sync_processor_queue_and_flush_time_ms&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L227">        SYNC_PROCESSOR_QUEUE_SIZE = metricsContext.getSummary(&quot;sync_processor_queue_size&quot;, DetailLevel.BASIC);</span>
+<span class="nc" id="L228">        SYNC_PROCESSOR_QUEUED = metricsContext.getCounter(&quot;sync_processor_request_queued&quot;);</span>
+<span class="nc" id="L229">        SYNC_PROCESSOR_QUEUE_TIME = metricsContext.getSummary(&quot;sync_processor_queue_time_ms&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L230">        SYNC_PROCESSOR_FLUSH_TIME = metricsContext.getSummary(&quot;sync_processor_queue_flush_time_ms&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L231">        SYNC_PROCESS_TIME = metricsContext.getSummary(&quot;sync_process_time&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L233">        BATCH_SIZE = metricsContext.getSummary(&quot;sync_processor_batch_size&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L235">        QUORUM_ACK_LATENCY = metricsContext.getSummary(&quot;quorum_ack_latency&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L236">        ACK_LATENCY = metricsContext.getSummarySet(&quot;ack_latency&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L237">        PROPOSAL_COUNT = metricsContext.getCounter(&quot;proposal_count&quot;);</span>
+<span class="nc" id="L238">        QUIT_LEADING_DUE_TO_DISLOYAL_VOTER = metricsContext.getCounter(&quot;quit_leading_due_to_disloyal_voter&quot;);</span>
+
+<span class="nc" id="L240">        STALE_REQUESTS = metricsContext.getCounter(&quot;stale_requests&quot;);</span>
+<span class="nc" id="L241">        STALE_REQUESTS_DROPPED = metricsContext.getCounter(&quot;stale_requests_dropped&quot;);</span>
+<span class="nc" id="L242">        STALE_REPLIES = metricsContext.getCounter(&quot;stale_replies&quot;);</span>
+<span class="nc" id="L243">        REQUEST_THROTTLE_QUEUE_TIME = metricsContext.getSummary(&quot;request_throttle_queue_time_ms&quot;, DetailLevel.ADVANCED);</span>
+<span class="nc" id="L244">        REQUEST_THROTTLE_WAIT_COUNT = metricsContext.getCounter(&quot;request_throttle_wait_count&quot;);</span>
+<span class="nc" id="L245">        LARGE_REQUESTS_REJECTED = metricsContext.getCounter(&quot;large_requests_rejected&quot;);</span>
+
+<span class="nc" id="L247">        NETTY_QUEUED_BUFFER = metricsContext.getSummary(&quot;netty_queued_buffer_capacity&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L249">        DIGEST_MISMATCHES_COUNT = metricsContext.getCounter(&quot;digest_mismatches_count&quot;);</span>
+
+<span class="nc" id="L251">        LEARNER_REQUEST_PROCESSOR_QUEUE_SIZE = metricsContext.getSummary(&quot;learner_request_processor_queue_size&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L253">        UNSUCCESSFUL_HANDSHAKE = metricsContext.getCounter(&quot;unsuccessful_handshake&quot;);</span>
+<span class="nc" id="L254">        INSECURE_ADMIN = metricsContext.getCounter(&quot;insecure_admin_count&quot;);</span>
+<span class="nc" id="L255">        TLS_HANDSHAKE_EXCEEDED = metricsContext.getCounter(&quot;tls_handshake_exceeded&quot;);</span>
+
+<span class="nc" id="L257">        CNXN_CLOSED_WITHOUT_ZK_SERVER_RUNNING = metricsContext.getCounter(&quot;cnxn_closed_without_zk_server_running&quot;);</span>
+
+<span class="nc" id="L259">        SKIP_LEARNER_REQUEST_TO_NEXT_PROCESSOR_COUNT = metricsContext.getCounter(&quot;skip_learner_request_to_next_processor_count&quot;);</span>
+
+<span class="nc" id="L261">        SOCKET_CLOSING_TIME = metricsContext.getSummary(&quot;socket_closing_time&quot;, DetailLevel.BASIC);</span>
+
+<span class="nc" id="L263">        REQUESTS_NOT_FORWARDED_TO_COMMIT_PROCESSOR = metricsContext.getCounter(</span>
+                &quot;requests_not_forwarded_to_commit_processor&quot;);
+
+<span class="nc" id="L266">        RESPONSE_BYTES = metricsContext.getCounter(&quot;response_bytes&quot;);</span>
+<span class="nc" id="L267">        WATCH_BYTES = metricsContext.getCounter(&quot;watch_bytes&quot;);</span>
+
+<span class="nc" id="L269">        JVM_PAUSE_TIME = metricsContext.getSummary(&quot;jvm_pause_time_ms&quot;, DetailLevel.ADVANCED);</span>
+
+<span class="nc" id="L271">        QUOTA_EXCEEDED_ERROR_PER_NAMESPACE = metricsContext.getCounterSet(QuotaMetricsUtils.QUOTA_EXCEEDED_ERROR_PER_NAMESPACE);</span>
+
+<span class="nc" id="L273">        TTL_NODE_DELETED_COUNT = metricsContext.getCounter(&quot;ttl_node_deleted_count&quot;);</span>
+<span class="nc" id="L274">        TTL_NODE_CREATED_COUNT = metricsContext.getCounter(&quot;ttl_node_created_count&quot;);</span>
+
+        // Operation count metrics
+<span class="nc" id="L277">        OP_COUNT_TOTAL = metricsContext.getCounter(&quot;op_count_total&quot;);</span>
+<span class="nc" id="L278">        OP_COUNT_ADD_WATCH = metricsContext.getCounter(&quot;op_count_add_watch&quot;);</span>
+<span class="nc" id="L279">        OP_COUNT_CHECK = metricsContext.getCounter(&quot;op_count_check&quot;);</span>
+<span class="nc" id="L280">        OP_COUNT_CHECK_WATCHES = metricsContext.getCounter(&quot;op_count_check_watches&quot;);</span>
+<span class="nc" id="L281">        OP_COUNT_CLOSE_SESSION = metricsContext.getCounter(&quot;op_count_close_session&quot;);</span>
+<span class="nc" id="L282">        OP_COUNT_CREATE = metricsContext.getCounter(&quot;op_count_create&quot;);</span>
+<span class="nc" id="L283">        OP_COUNT_CREATE_SESSION = metricsContext.getCounter(&quot;op_count_create_session&quot;);</span>
+<span class="nc" id="L284">        OP_COUNT_DELETE = metricsContext.getCounter(&quot;op_count_delete&quot;);</span>
+<span class="nc" id="L285">        OP_COUNT_EXISTS = metricsContext.getCounter(&quot;op_count_exists&quot;);</span>
+<span class="nc" id="L286">        OP_COUNT_GET_ACL = metricsContext.getCounter(&quot;op_count_get_acl&quot;);</span>
+<span class="nc" id="L287">        OP_COUNT_GET_ALL_CHILDREN_NUMBER = metricsContext.getCounter(&quot;op_count_get_all_children_number&quot;);</span>
+<span class="nc" id="L288">        OP_COUNT_GET_CHILDREN = metricsContext.getCounter(&quot;op_count_get_children&quot;);</span>
+<span class="nc" id="L289">        OP_COUNT_GET_DATA = metricsContext.getCounter(&quot;op_count_get_data&quot;);</span>
+<span class="nc" id="L290">        OP_COUNT_GET_EPHEMERALS = metricsContext.getCounter(&quot;op_count_get_ephemerals&quot;);</span>
+<span class="nc" id="L291">        OP_COUNT_MULTI = metricsContext.getCounter(&quot;op_count_multi&quot;);</span>
+<span class="nc" id="L292">        OP_COUNT_MULTI_READ = metricsContext.getCounter(&quot;op_count_multi_read&quot;);</span>
+<span class="nc" id="L293">        OP_COUNT_PING = metricsContext.getCounter(&quot;op_count_ping&quot;);</span>
+<span class="nc" id="L294">        OP_COUNT_RECONFIG = metricsContext.getCounter(&quot;op_count_reconfig&quot;);</span>
+<span class="nc" id="L295">        OP_COUNT_REMOVE_WATCHES = metricsContext.getCounter(&quot;op_count_remove_watches&quot;);</span>
+<span class="nc" id="L296">        OP_COUNT_SET_ACL = metricsContext.getCounter(&quot;op_count_set_acl&quot;);</span>
+<span class="nc" id="L297">        OP_COUNT_SET_DATA = metricsContext.getCounter(&quot;op_count_set_data&quot;);</span>
+<span class="nc" id="L298">        OP_COUNT_SET_WATCHES = metricsContext.getCounter(&quot;op_count_set_watches&quot;);</span>
+<span class="nc" id="L299">        OP_COUNT_SYNC = metricsContext.getCounter(&quot;op_count_sync&quot;);</span>
+<span class="nc" id="L300">        OP_COUNT_WHO_AM_I = metricsContext.getCounter(&quot;op_count_who_am_i&quot;);</span>
+<span class="nc" id="L301">    }</span>
+
+    /**
+     * Txnlog fsync time
+     */
+    public final Summary FSYNC_TIME;
+
+    /**
+     * Snapshot writing time
+     */
+    public final Summary SNAPSHOT_TIME;
+
+    /**
+     * Snapshot error count
+     */
+    public final Counter SNAPSHOT_ERROR_COUNT;
+
+    /**
+     * Snapshot rate limited count
+     */
+    public final Counter SNAPSHOT_RATE_LIMITED_COUNT;
+
+    /**
+     * Restore time
+     */
+    public final Summary RESTORE_TIME;
+
+    /**
+     * Restore error count
+     */
+    public final Counter RESTORE_ERROR_COUNT;
+
+    /**
+     * Restore rate limited count
+     */
+    public final Counter RESTORE_RATE_LIMITED_COUNT;
+
+    /**
+     * Db init time (snapshot loading + txnlog replay)
+     */
+    public final Summary DB_INIT_TIME;
+
+    /**
+     * Stats for read request. The timing start from when the server see the
+     * request until it leave final request processor.
+     */
+    public final Summary READ_LATENCY;
+
+    /**
+     * Stats for request that need quorum voting. Timing is the same as read
+     * request. We only keep track of stats for request that originated from
+     * this machine only.
+     */
+    public final Summary UPDATE_LATENCY;
+
+    /**
+     * Stats for all quorum request. The timing start from when the leader see
+     * the request until it reach the learner.
+     */
+    public final Summary PROPAGATION_LATENCY;
+
+    public final Summary FOLLOWER_SYNC_TIME;
+    public final Summary OBSERVER_SYNC_TIME;
+
+    public final Summary ELECTION_TIME;
+
+    public final Counter LOOKING_COUNT;
+    public final Counter DIFF_COUNT;
+    public final Counter SNAP_COUNT;
+    public final Counter COMMIT_COUNT;
+    public final Counter CONNECTION_REQUEST_COUNT;
+
+    public final Counter REVALIDATE_COUNT;
+    public final Counter CONNECTION_DROP_COUNT;
+    public final Counter CONNECTION_REVALIDATE_COUNT;
+
+    // Expiry queue stats
+    public final Counter SESSIONLESS_CONNECTIONS_EXPIRED;
+    public final Counter STALE_SESSIONS_EXPIRED;
+
+    public final Summary UNAVAILABLE_TIME;
+    public final Summary LEADER_UNAVAILABLE_TIME;
+
+    // Connection throttling related
+    public final Summary CONNECTION_TOKEN_DEFICIT;
+    public final Counter CONNECTION_REJECTED;
+
+    public final Summary INFLIGHT_SNAP_COUNT;
+    public final Summary INFLIGHT_DIFF_COUNT;
+
+    public final Counter UNRECOVERABLE_ERROR_COUNT;
+    public final SummarySet WRITE_PER_NAMESPACE;
+    public final SummarySet READ_PER_NAMESPACE;
+    public final Counter BYTES_RECEIVED_COUNT;
+
+    public final Summary PREP_PROCESSOR_QUEUE_TIME;
+    public final Summary PREP_PROCESSOR_QUEUE_SIZE;
+    public final Counter PREP_PROCESSOR_QUEUED;
+    public final Counter OUTSTANDING_CHANGES_QUEUED;
+    public final Counter OUTSTANDING_CHANGES_REMOVED;
+    public final Summary PREP_PROCESS_TIME;
+    public final Summary PROPOSAL_PROCESS_TIME;
+    public final Summary CLOSE_SESSION_PREP_TIME;
+
+    public final Summary PROPOSAL_LATENCY;
+    public final Summary PROPOSAL_ACK_CREATION_LATENCY;
+    public final Summary COMMIT_PROPAGATION_LATENCY;
+    public final Counter LEARNER_PROPOSAL_RECEIVED_COUNT;
+    public final Counter LEARNER_COMMIT_RECEIVED_COUNT;
+
+    public final Summary STARTUP_TXNS_LOADED;
+    public final Summary STARTUP_TXNS_LOAD_TIME;
+    public final Summary STARTUP_SNAP_LOAD_TIME;
+
+    public final Summary SYNC_PROCESSOR_QUEUE_AND_FLUSH_TIME;
+    public final Summary SYNC_PROCESSOR_QUEUE_SIZE;
+    public final Counter SYNC_PROCESSOR_QUEUED;
+    public final Summary SYNC_PROCESSOR_QUEUE_TIME;
+    public final Summary SYNC_PROCESSOR_FLUSH_TIME;
+    public final Summary SYNC_PROCESS_TIME;
+
+    public final Summary BATCH_SIZE;
+
+    public final Summary QUORUM_ACK_LATENCY;
+    public final SummarySet ACK_LATENCY;
+    public final Counter PROPOSAL_COUNT;
+    public final Counter QUIT_LEADING_DUE_TO_DISLOYAL_VOTER;
+
+    /**
+     * Fired watcher stats.
+     */
+    public final Summary NODE_CREATED_WATCHER;
+    public final Summary NODE_DELETED_WATCHER;
+    public final Summary NODE_CHANGED_WATCHER;
+    public final Summary NODE_CHILDREN_WATCHER;
+
+    /*
+     * Number of dead watchers in DeadWatcherListener
+     */
+    public final Counter ADD_DEAD_WATCHER_STALL_TIME;
+    public final Counter DEAD_WATCHERS_QUEUED;
+    public final Counter DEAD_WATCHERS_CLEARED;
+    public final Summary DEAD_WATCHERS_CLEANER_LATENCY;
+
+    /*
+     * Response cache hit and miss metrics.
+     */
+    public final Counter RESPONSE_PACKET_CACHE_HITS;
+    public final Counter RESPONSE_PACKET_CACHE_MISSING;
+    public final Counter RESPONSE_PACKET_GET_CHILDREN_CACHE_HITS;
+    public final Counter RESPONSE_PACKET_GET_CHILDREN_CACHE_MISSING;
+
+    /**
+     * Learner handler quorum packet metrics.
+     */
+    public final SummarySet LEARNER_HANDLER_QP_SIZE;
+    public final SummarySet LEARNER_HANDLER_QP_TIME;
+
+    /*
+     * Number of requests that are in the session queue.
+     */
+    public final Summary REQUESTS_IN_SESSION_QUEUE;
+    public final Summary PENDING_SESSION_QUEUE_SIZE;
+    /*
+     * Consecutive number of read requests that are in the session queue right after a commit request.
+     */
+    public final Summary READS_AFTER_WRITE_IN_SESSION_QUEUE;
+    public final Summary READ_ISSUED_FROM_SESSION_QUEUE;
+    public final Summary SESSION_QUEUES_DRAINED;
+
+    public final Summary TIME_WAITING_EMPTY_POOL_IN_COMMIT_PROCESSOR_READ;
+    public final Summary WRITE_BATCH_TIME_IN_COMMIT_PROCESSOR;
+
+    public final Summary CONCURRENT_REQUEST_PROCESSING_IN_COMMIT_PROCESSOR;
+
+    public final Summary READS_QUEUED_IN_COMMIT_PROCESSOR;
+    public final Summary WRITES_QUEUED_IN_COMMIT_PROCESSOR;
+    public final Summary COMMITS_QUEUED_IN_COMMIT_PROCESSOR;
+    public final Counter COMMITS_QUEUED;
+    public final Summary READS_ISSUED_IN_COMMIT_PROC;
+    public final Summary WRITES_ISSUED_IN_COMMIT_PROC;
+
+    // Request op throttling related
+    public final Counter THROTTLED_OPS;
+
+    /**
+     * Time spent by a read request in the commit processor.
+     */
+    public final Summary READ_COMMITPROC_TIME;
+
+    /**
+     * Time spent by a write request in the commit processor.
+     */
+    public final Summary WRITE_COMMITPROC_TIME;
+
+    /**
+     * Time spent by a committed request, for a locally issued write, in the
+     * commit processor.
+     */
+    public final Summary LOCAL_WRITE_COMMITTED_TIME;
+
+    /**
+     * Time spent by a committed request for a write, issued by other server, in the
+     * commit processor.
+     */
+    public final Summary SERVER_WRITE_COMMITTED_TIME;
+
+    public final Summary COMMIT_PROCESS_TIME;
+
+    /**
+     * Observer Master processing metrics.
+     */
+    public final Summary OM_PROPOSAL_PROCESS_TIME;
+    public final Summary OM_COMMIT_PROCESS_TIME;
+
+    /**
+     * Time spent by the final processor. This is tracked in the commit processor.
+     */
+    public final Summary READ_FINAL_PROC_TIME;
+    public final Summary WRITE_FINAL_PROC_TIME;
+
+    /*
+     * Number of successful matches of expected ensemble name in EnsembleAuthenticationProvider.
+     */
+    public final Counter ENSEMBLE_AUTH_SUCCESS;
+
+    /*
+     * Number of unsuccessful matches of expected ensemble name in EnsembleAuthenticationProvider.
+     */
+    public final Counter ENSEMBLE_AUTH_FAIL;
+
+    /*
+     * Number of client auth requests with no ensemble set in EnsembleAuthenticationProvider.
+     */
+    public final Counter ENSEMBLE_AUTH_SKIP;
+
+    public final Counter STALE_REQUESTS;
+    public final Counter STALE_REQUESTS_DROPPED;
+    public final Counter STALE_REPLIES;
+    public final Summary REQUEST_THROTTLE_QUEUE_TIME;
+    public final Counter REQUEST_THROTTLE_WAIT_COUNT;
+    public final Counter LARGE_REQUESTS_REJECTED;
+
+    public final Summary NETTY_QUEUED_BUFFER;
+
+    // Total number of digest mismatches that are observed when applying
+    // txns to data tree.
+    public final Counter DIGEST_MISMATCHES_COUNT;
+
+    public final Summary LEARNER_REQUEST_PROCESSOR_QUEUE_SIZE;
+
+    public final Counter UNSUCCESSFUL_HANDSHAKE;
+
+    /*
+     * Number of insecure connections to admin port
+     */
+    public final Counter INSECURE_ADMIN;
+
+    public final Counter TLS_HANDSHAKE_EXCEEDED;
+
+    public final Counter CNXN_CLOSED_WITHOUT_ZK_SERVER_RUNNING;
+
+    public final Counter SKIP_LEARNER_REQUEST_TO_NEXT_PROCESSOR_COUNT;
+
+    public final Summary SOCKET_CLOSING_TIME;
+
+    public final Counter REQUESTS_NOT_FORWARDED_TO_COMMIT_PROCESSOR;
+
+    /**
+     *  Number of response/watch bytes written to clients.
+     */
+    public final Counter RESPONSE_BYTES;
+    public final Counter WATCH_BYTES;
+
+    public final Summary JVM_PAUSE_TIME;
+
+    public final CounterSet QUOTA_EXCEEDED_ERROR_PER_NAMESPACE;
+
+    /**
+     * Count of created and deleted TTL nodes
+     */
+    public final Counter TTL_NODE_DELETED_COUNT;
+    public final Counter TTL_NODE_CREATED_COUNT;
+
+    // Operation count metrics
+    public final Counter OP_COUNT_TOTAL;
+    public final Counter OP_COUNT_ADD_WATCH;
+    public final Counter OP_COUNT_CHECK;
+    public final Counter OP_COUNT_CHECK_WATCHES;
+    public final Counter OP_COUNT_CLOSE_SESSION;
+    public final Counter OP_COUNT_CREATE;
+    public final Counter OP_COUNT_CREATE_SESSION;
+    public final Counter OP_COUNT_DELETE;
+    public final Counter OP_COUNT_EXISTS;
+    public final Counter OP_COUNT_GET_ACL;
+    public final Counter OP_COUNT_GET_ALL_CHILDREN_NUMBER;
+    public final Counter OP_COUNT_GET_CHILDREN;
+    public final Counter OP_COUNT_GET_DATA;
+    public final Counter OP_COUNT_GET_EPHEMERALS;
+    public final Counter OP_COUNT_MULTI;
+    public final Counter OP_COUNT_MULTI_READ;
+    public final Counter OP_COUNT_PING;
+    public final Counter OP_COUNT_RECONFIG;
+    public final Counter OP_COUNT_REMOVE_WATCHES;
+    public final Counter OP_COUNT_SET_ACL;
+    public final Counter OP_COUNT_SET_DATA;
+    public final Counter OP_COUNT_SET_WATCHES;
+    public final Counter OP_COUNT_SYNC;
+    public final Counter OP_COUNT_WHO_AM_I;
+
+
+    private final MetricsProvider metricsProvider;
+
+    public void resetAll() {
+<span class="nc" id="L615">        metricsProvider.resetAllValues();</span>
+<span class="nc" id="L616">    }</span>
+
+    public MetricsProvider getMetricsProvider() {
+<span class="nc" id="L619">        return metricsProvider;</span>
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

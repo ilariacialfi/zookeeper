@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Chroot.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.client</a> &gt; <span class="el_source">Chroot.java</span></div><h1>Chroot.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.client;
+
+import java.util.Objects;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.zookeeper.AsyncCallback;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+
+@InterfaceAudience.Private
+public interface Chroot {
+    static Chroot ofNullable(String chroot) {
+<span class="nc bnc" id="L30" title="All 2 branches missed.">        if (chroot == null) {</span>
+<span class="nc" id="L31">            return new Root();</span>
+        }
+<span class="nc" id="L33">        return new NotRoot(chroot);</span>
+    }
+
+    /**
+     * Creates server path by prepending chroot to given client path.
+     *
+     * @param clientPath client path
+     * @return sever path with chroot prepended
+     */
+    String prepend(String clientPath);
+
+    /**
+     * Creates client path by stripping chroot from given sever path.
+     *
+     * @param serverPath sever path with chroot prepended
+     * @return client path with chroot stripped
+     * @throws IllegalArgumentException if given server path contains no chroot
+     */
+    String strip(String serverPath);
+
+    /**
+     * Creates a delegating callback to strip chroot from created node name.
+     */
+    AsyncCallback.StringCallback interceptCallback(AsyncCallback.StringCallback callback);
+
+    /**
+     * Creates a delegating callback to strip chroot from created node name.
+     */
+    AsyncCallback.Create2Callback interceptCallback(AsyncCallback.Create2Callback callback);
+
+    /**
+     * Creates a delegating watcher to strip chroot from {@link WatchedEvent#getPath()} for given watcher.
+     */
+    Watcher interceptWatcher(Watcher watcher);
+
+<span class="nc" id="L68">    final class Root implements Chroot {</span>
+        @Override
+        public String prepend(String clientPath) {
+<span class="nc" id="L71">            return clientPath;</span>
+        }
+
+        @Override
+        public String strip(String serverPath) {
+<span class="nc" id="L76">            return serverPath;</span>
+        }
+
+        @Override
+        public AsyncCallback.StringCallback interceptCallback(AsyncCallback.StringCallback callback) {
+<span class="nc" id="L81">            return callback;</span>
+        }
+
+        @Override
+        public AsyncCallback.Create2Callback interceptCallback(AsyncCallback.Create2Callback callback) {
+<span class="nc" id="L86">            return callback;</span>
+        }
+
+        @Override
+        public Watcher interceptWatcher(Watcher watcher) {
+<span class="nc" id="L91">            return watcher;</span>
+        }
+    }
+
+    final class NotRoot implements Chroot {
+        private final String chroot;
+
+<span class="nc" id="L98">        public NotRoot(String chroot) {</span>
+<span class="nc" id="L99">            this.chroot = Objects.requireNonNull(chroot);</span>
+<span class="nc" id="L100">        }</span>
+
+        @Override
+        public String prepend(String clientPath) {
+            // handle clientPath = &quot;/&quot;
+<span class="nc bnc" id="L105" title="All 2 branches missed.">            if (clientPath.length() == 1) {</span>
+<span class="nc" id="L106">                return chroot;</span>
+            }
+<span class="nc" id="L108">            return chroot + clientPath;</span>
+        }
+
+        @Override
+        public String strip(String serverPath) {
+<span class="nc bnc" id="L113" title="All 2 branches missed.">            if (!serverPath.startsWith(chroot)) {</span>
+<span class="nc" id="L114">                String msg = String.format(&quot;server path %s does no start with chroot %s&quot;, serverPath, chroot);</span>
+<span class="nc" id="L115">                throw new IllegalArgumentException(msg);</span>
+            }
+<span class="nc bnc" id="L117" title="All 2 branches missed.">            if (chroot.length() == serverPath.length()) {</span>
+<span class="nc" id="L118">                return &quot;/&quot;;</span>
+            } else {
+<span class="nc" id="L120">                return serverPath.substring(chroot.length());</span>
+            }
+        }
+
+        @Override
+        public AsyncCallback.StringCallback interceptCallback(AsyncCallback.StringCallback callback) {
+<span class="nc" id="L126">            return new ChrootCreateCallback(this, callback);</span>
+        }
+
+        @Override
+        public AsyncCallback.Create2Callback interceptCallback(AsyncCallback.Create2Callback callback) {
+<span class="nc" id="L131">            return new ChrootCreateCallback(this, callback);</span>
+        }
+
+        @Override
+        public Watcher interceptWatcher(Watcher watcher) {
+<span class="nc" id="L136">            return new ChrootWatcher(this, watcher);</span>
+        }
+
+        @Override
+        public boolean equals(Object other) {
+<span class="nc bnc" id="L141" title="All 2 branches missed.">            if (other instanceof NotRoot) {</span>
+<span class="nc" id="L142">                return Objects.equals(chroot, ((NotRoot) other).chroot);</span>
+            }
+<span class="nc" id="L144">            return false;</span>
+        }
+
+        @Override
+        public int hashCode() {
+<span class="nc" id="L149">            return Objects.hash(chroot);</span>
+        }
+
+        @Override
+        public String toString() {
+<span class="nc" id="L154">            return chroot;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

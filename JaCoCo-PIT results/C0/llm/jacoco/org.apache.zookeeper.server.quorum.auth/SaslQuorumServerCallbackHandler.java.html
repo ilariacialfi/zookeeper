@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SaslQuorumServerCallbackHandler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server.quorum.auth</a> &gt; <span class="el_source">SaslQuorumServerCallbackHandler.java</span></div><h1>SaslQuorumServerCallbackHandler.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server.quorum.auth;
+
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+import javax.security.auth.callback.Callback;
+import javax.security.auth.callback.CallbackHandler;
+import javax.security.auth.callback.NameCallback;
+import javax.security.auth.callback.PasswordCallback;
+import javax.security.auth.callback.UnsupportedCallbackException;
+import javax.security.auth.login.AppConfigurationEntry;
+import javax.security.sasl.AuthorizeCallback;
+import javax.security.sasl.RealmCallback;
+import org.apache.zookeeper.server.auth.DigestLoginModule;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * This is used by the SASL mechanisms to get further information to complete
+ * the authentication. For example, a SASL mechanism might use this callback
+ * handler to do verification operation. This is used by the QuorumServer to
+ * perform the mutual quorum peer authentication.
+ */
+public class SaslQuorumServerCallbackHandler implements CallbackHandler {
+
+    private static final String USER_PREFIX = &quot;user_&quot;;
+<span class="nc" id="L46">    private static final Logger LOG = LoggerFactory.getLogger(SaslQuorumServerCallbackHandler.class);</span>
+
+    private String userName;
+    private final boolean isDigestAuthn;
+    private final Map&lt;String, String&gt; credentials;
+    private final Set&lt;String&gt; authzHosts;
+
+    public SaslQuorumServerCallbackHandler(
+        AppConfigurationEntry[] configurationEntries,
+<span class="nc" id="L55">        Set&lt;String&gt; authzHosts) {</span>
+
+<span class="nc" id="L57">        Map&lt;String, String&gt; credentials = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L58">        boolean isDigestAuthn = true;</span>
+
+<span class="nc bnc" id="L60" title="All 2 branches missed.">        for (AppConfigurationEntry entry : configurationEntries) {</span>
+<span class="nc bnc" id="L61" title="All 2 branches missed.">            if (entry.getLoginModuleName().equals(DigestLoginModule.class.getName())) {</span>
+<span class="nc" id="L62">                Map&lt;String, ?&gt; options = entry.getOptions();</span>
+                // Populate DIGEST-MD5 user -&gt; password map with JAAS configuration entries from the &quot;QuorumServer&quot; section.
+                // Usernames are distinguished from other options by prefixing the username with a &quot;user_&quot; prefix.
+<span class="nc bnc" id="L65" title="All 2 branches missed.">                for (Map.Entry&lt;String, ?&gt; pair : options.entrySet()) {</span>
+<span class="nc" id="L66">                    String key = pair.getKey();</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">                    if (key.startsWith(USER_PREFIX)) {</span>
+<span class="nc" id="L68">                        String userName = key.substring(USER_PREFIX.length());</span>
+<span class="nc" id="L69">                        credentials.put(userName, (String) pair.getValue());</span>
+                    }
+<span class="nc" id="L71">                }</span>
+<span class="nc" id="L72">            } else {</span>
+<span class="nc" id="L73">                isDigestAuthn = false;</span>
+            }
+        }
+
+<span class="nc" id="L77">        this.isDigestAuthn = isDigestAuthn;</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">        if (isDigestAuthn) {</span>
+<span class="nc" id="L79">            this.credentials = Collections.unmodifiableMap(credentials);</span>
+<span class="nc" id="L80">            LOG.warn(&quot;Using DIGEST-MD5 for quorum authorization&quot;);</span>
+        } else {
+<span class="nc" id="L82">            this.credentials = Collections.emptyMap();</span>
+        }
+
+        // authorized host lists
+<span class="nc" id="L86">        this.authzHosts = authzHosts;</span>
+<span class="nc" id="L87">    }</span>
+
+    public void handle(Callback[] callbacks) throws UnsupportedCallbackException {
+<span class="nc bnc" id="L90" title="All 2 branches missed.">        for (Callback callback : callbacks) {</span>
+<span class="nc bnc" id="L91" title="All 2 branches missed.">            if (callback instanceof NameCallback) {</span>
+<span class="nc" id="L92">                handleNameCallback((NameCallback) callback);</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">            } else if (callback instanceof PasswordCallback) {</span>
+<span class="nc" id="L94">                handlePasswordCallback((PasswordCallback) callback);</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">            } else if (callback instanceof RealmCallback) {</span>
+<span class="nc" id="L96">                handleRealmCallback((RealmCallback) callback);</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">            } else if (callback instanceof AuthorizeCallback) {</span>
+<span class="nc" id="L98">                handleAuthorizeCallback((AuthorizeCallback) callback);</span>
+            }
+        }
+<span class="nc" id="L101">    }</span>
+
+    private void handleNameCallback(NameCallback nc) {
+        // check to see if this user is in the user password database.
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (credentials.get(nc.getDefaultName()) == null) {</span>
+<span class="nc" id="L106">            LOG.warn(&quot;User '{}' not found in list of DIGEST-MD5 authenticateable users.&quot;, nc.getDefaultName());</span>
+<span class="nc" id="L107">            return;</span>
+        }
+<span class="nc" id="L109">        nc.setName(nc.getDefaultName());</span>
+<span class="nc" id="L110">        userName = nc.getDefaultName();</span>
+<span class="nc" id="L111">    }</span>
+
+    private void handlePasswordCallback(PasswordCallback pc) {
+<span class="nc bnc" id="L114" title="All 2 branches missed.">        if (credentials.containsKey(userName)) {</span>
+<span class="nc" id="L115">            pc.setPassword(credentials.get(userName).toCharArray());</span>
+        } else {
+<span class="nc" id="L117">            LOG.warn(&quot;No password found for user: {}&quot;, userName);</span>
+        }
+<span class="nc" id="L119">    }</span>
+
+    private void handleRealmCallback(RealmCallback rc) {
+<span class="nc" id="L122">        LOG.debug(&quot;QuorumLearner supplied realm: {}&quot;, rc.getDefaultText());</span>
+<span class="nc" id="L123">        rc.setText(rc.getDefaultText());</span>
+<span class="nc" id="L124">    }</span>
+
+    private void handleAuthorizeCallback(AuthorizeCallback ac) {
+<span class="nc" id="L127">        String authenticationID = ac.getAuthenticationID();</span>
+<span class="nc" id="L128">        String authorizationID = ac.getAuthorizationID();</span>
+
+<span class="nc" id="L130">        boolean authzFlag = false;</span>
+        // 1. Matches authenticationID and authorizationID
+<span class="nc" id="L132">        authzFlag = authenticationID.equals(authorizationID);</span>
+
+        // 2. Verify whether the connecting host is present in authorized hosts.
+        // If not exists, then connecting peer is not authorized to join the
+        // ensemble and will reject it.
+<span class="nc bnc" id="L137" title="All 4 branches missed.">        if (!isDigestAuthn &amp;&amp; authzFlag) {</span>
+<span class="nc" id="L138">            String[] components = authorizationID.split(&quot;[/@]&quot;);</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">            if (components.length == 3) {</span>
+<span class="nc" id="L140">                authzFlag = authzHosts.contains(components[1]);</span>
+            } else {
+<span class="nc" id="L142">                authzFlag = false;</span>
+            }
+<span class="nc bnc" id="L144" title="All 2 branches missed.">            if (!authzFlag) {</span>
+<span class="nc" id="L145">                LOG.error(&quot;SASL authorization completed, {} is not authorized to connect&quot;, authorizationID);</span>
+            }
+        }
+
+        // Sets authorization flag
+<span class="nc" id="L150">        ac.setAuthorized(authzFlag);</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">        if (ac.isAuthorized()) {</span>
+<span class="nc" id="L152">            ac.setAuthorizedID(authorizationID);</span>
+<span class="nc" id="L153">            LOG.info(&quot;Successfully authenticated learner: authenticationID={};  authorizationID={}.&quot;,</span>
+                     authenticationID, authorizationID);
+        }
+<span class="nc" id="L156">        LOG.debug(&quot;SASL authorization completed, authorized flag set to {}&quot;, ac.isAuthorized());</span>
+<span class="nc" id="L157">    }</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

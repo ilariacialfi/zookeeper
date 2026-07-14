@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ContainerManager.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server</a> &gt; <span class="el_source">ContainerManager.java</span></div><h1>ContainerManager.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server;
+
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import org.apache.zookeeper.DeleteContainerRequest;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.common.Time;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Manages cleanup of container ZNodes. This class is meant to only
+ * be run from the leader. There's no harm in running from followers/observers
+ * but that will be extra work that's not needed. Once started, it periodically
+ * checks container nodes that have a cversion &amp;gt; 0 and have no children. A
+ * delete is attempted on the node. The result of the delete is unimportant.
+ * If the proposal fails or the container node is not empty there's no harm.
+ */
+public class ContainerManager {
+
+<span class="nc" id="L44">    private static final Logger LOG = LoggerFactory.getLogger(ContainerManager.class);</span>
+    private final ZKDatabase zkDb;
+    private final RequestProcessor requestProcessor;
+    private final int checkIntervalMs;
+    private final int maxPerMinute;
+    private final long maxNeverUsedIntervalMs;
+    private final Timer timer;
+<span class="nc" id="L51">    private final AtomicReference&lt;TimerTask&gt; task = new AtomicReference&lt;&gt;(null);</span>
+
+    /**
+     * @param zkDb the ZK database
+     * @param requestProcessor request processor - used to inject delete
+     *                         container requests
+     */
+    public ContainerManager(ZKDatabase zkDb, RequestProcessor requestProcessor) {
+<span class="nc" id="L59">        this(</span>
+            zkDb, requestProcessor,
+<span class="nc" id="L61">            Integer.getInteger(&quot;znode.container.checkIntervalMs&quot;, (int) TimeUnit.MINUTES.toMillis(1)),</span>
+<span class="nc" id="L62">            Integer.getInteger(&quot;znode.container.maxPerMinute&quot;, 10000),</span>
+<span class="nc" id="L63">            Long.getLong(&quot;znode.container.maxNeverUsedIntervalMs&quot;, TimeUnit.MINUTES.toMillis(5))</span>
+        );
+<span class="nc" id="L65">    }</span>
+
+    /**
+     * @param zkDb the ZK database
+     * @param requestProcessor request processor - used to inject delete
+     *                         container requests
+     * @param checkIntervalMs how often to check containers in milliseconds
+     * @param maxPerMinute the max containers to delete per second - avoids
+     *                     herding of container deletions
+     */
+    public ContainerManager(ZKDatabase zkDb, RequestProcessor requestProcessor, int checkIntervalMs, int maxPerMinute) {
+<span class="nc" id="L76">        this(zkDb, requestProcessor, checkIntervalMs, maxPerMinute, 0);</span>
+<span class="nc" id="L77">    }</span>
+
+    /**
+     * @param zkDb the ZK database
+     * @param requestProcessor request processor - used to inject delete
+     *                         container requests
+     * @param checkIntervalMs how often to check containers in milliseconds
+     * @param maxPerMinute the max containers to delete per second - avoids
+     *                     herding of container deletions
+     * @param maxNeverUsedIntervalMs the max time in milliseconds that a container that has never had
+     *                                  any children is retained
+     */
+<span class="nc" id="L89">    public ContainerManager(ZKDatabase zkDb, RequestProcessor requestProcessor, int checkIntervalMs, int maxPerMinute, long maxNeverUsedIntervalMs) {</span>
+<span class="nc" id="L90">        this.zkDb = zkDb;</span>
+<span class="nc" id="L91">        this.requestProcessor = requestProcessor;</span>
+<span class="nc" id="L92">        this.checkIntervalMs = checkIntervalMs;</span>
+<span class="nc" id="L93">        this.maxPerMinute = maxPerMinute;</span>
+<span class="nc" id="L94">        this.maxNeverUsedIntervalMs = maxNeverUsedIntervalMs;</span>
+<span class="nc" id="L95">        timer = new Timer(&quot;ContainerManagerTask&quot;, true);</span>
+
+<span class="nc" id="L97">        LOG.info(&quot;Using checkIntervalMs={} maxPerMinute={} maxNeverUsedIntervalMs={}&quot;, checkIntervalMs, maxPerMinute, maxNeverUsedIntervalMs);</span>
+<span class="nc" id="L98">    }</span>
+
+    /**
+     * start/restart the timer the runs the check. Can safely be called
+     * multiple times.
+     */
+    public void start() {
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (task.get() == null) {</span>
+<span class="nc" id="L106">            TimerTask timerTask = new TimerTask() {</span>
+                @Override
+                public void run() {
+                    try {
+<span class="nc" id="L110">                        checkContainers();</span>
+<span class="nc" id="L111">                    } catch (InterruptedException e) {</span>
+<span class="nc" id="L112">                        Thread.currentThread().interrupt();</span>
+<span class="nc" id="L113">                        LOG.info(&quot;interrupted&quot;);</span>
+<span class="nc" id="L114">                        cancel();</span>
+<span class="nc" id="L115">                    } catch (Throwable e) {</span>
+<span class="nc" id="L116">                        LOG.error(&quot;Error checking containers&quot;, e);</span>
+<span class="nc" id="L117">                    }</span>
+<span class="nc" id="L118">                }</span>
+            };
+<span class="nc bnc" id="L120" title="All 2 branches missed.">            if (task.compareAndSet(null, timerTask)) {</span>
+<span class="nc" id="L121">                timer.scheduleAtFixedRate(timerTask, checkIntervalMs, checkIntervalMs);</span>
+            }
+        }
+<span class="nc" id="L124">    }</span>
+
+    /**
+     * stop the timer if necessary. Can safely be called multiple times.
+     */
+    public void stop() {
+<span class="nc" id="L130">        TimerTask timerTask = task.getAndSet(null);</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">        if (timerTask != null) {</span>
+<span class="nc" id="L132">            timerTask.cancel();</span>
+        }
+<span class="nc" id="L134">        timer.cancel();</span>
+<span class="nc" id="L135">    }</span>
+
+    /**
+     * Manually check the containers. Not normally used directly
+     */
+    public void checkContainers() throws InterruptedException {
+<span class="nc" id="L141">        long minIntervalMs = getMinIntervalMs();</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">        for (String containerPath : getCandidates()) {</span>
+<span class="nc" id="L143">            long startMs = Time.currentElapsedTime();</span>
+
+<span class="nc" id="L145">            DeleteContainerRequest record = new DeleteContainerRequest(containerPath);</span>
+<span class="nc" id="L146">            Request request = new Request(null, 0, 0, ZooDefs.OpCode.deleteContainer, RequestRecord.fromRecord(record), null);</span>
+            try {
+<span class="nc" id="L148">                LOG.info(&quot;Attempting to delete candidate container: {}&quot;, containerPath);</span>
+<span class="nc" id="L149">                postDeleteRequest(request);</span>
+<span class="nc" id="L150">            } catch (Exception e) {</span>
+<span class="nc" id="L151">                LOG.error(&quot;Could not delete container: {}&quot;, containerPath, e);</span>
+<span class="nc" id="L152">            }</span>
+
+<span class="nc" id="L154">            long elapsedMs = Time.currentElapsedTime() - startMs;</span>
+<span class="nc" id="L155">            long waitMs = minIntervalMs - elapsedMs;</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">            if (waitMs &gt; 0) {</span>
+<span class="nc" id="L157">                Thread.sleep(waitMs);</span>
+            }
+<span class="nc" id="L159">        }</span>
+<span class="nc" id="L160">    }</span>
+
+    // VisibleForTesting
+    protected void postDeleteRequest(Request request) throws RequestProcessor.RequestProcessorException {
+<span class="nc" id="L164">        requestProcessor.processRequest(request);</span>
+<span class="nc" id="L165">    }</span>
+
+    // VisibleForTesting
+    protected long getMinIntervalMs() {
+<span class="nc" id="L169">        return TimeUnit.MINUTES.toMillis(1) / maxPerMinute;</span>
+    }
+
+    int getMaxPerMinute() {
+<span class="nc" id="L173">        return maxPerMinute;</span>
+    }
+
+    int getCheckIntervalMs() {
+<span class="nc" id="L177">        return checkIntervalMs;</span>
+    }
+
+    long getMaxNeverUsedIntervalMs() {
+<span class="nc" id="L181">        return maxNeverUsedIntervalMs;</span>
+    }
+
+    // VisibleForTesting
+    protected Collection&lt;String&gt; getCandidates() {
+<span class="nc" id="L186">        Set&lt;String&gt; candidates = new HashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">        for (String containerPath : zkDb.getDataTree().getContainers()) {</span>
+<span class="nc" id="L188">            DataNode node = zkDb.getDataTree().getNode(containerPath);</span>
+<span class="nc bnc" id="L189" title="All 4 branches missed.">            if ((node != null) &amp;&amp; node.getChildren().isEmpty()) {</span>
+                /*
+                    cversion &gt; 0: keep newly created containers from being deleted
+                    before any children have been added. If you were to create the
+                    container just before a container cleaning period the container
+                    would be immediately be deleted.
+                 */
+<span class="nc bnc" id="L196" title="All 2 branches missed.">                if (node.stat.getCversion() &gt; 0) {</span>
+<span class="nc" id="L197">                    candidates.add(containerPath);</span>
+                } else {
+                    /*
+                        Users may not want unused containers to live indefinitely. Allow a system
+                        property to be set that sets the max time for a cversion-0 container
+                        to stay before being deleted
+                     */
+<span class="nc bnc" id="L204" title="All 4 branches missed.">                    if ((maxNeverUsedIntervalMs != 0) &amp;&amp; (getElapsed(node) &gt; maxNeverUsedIntervalMs)) {</span>
+<span class="nc" id="L205">                        candidates.add(containerPath);</span>
+                    }
+                }
+            }
+<span class="nc" id="L209">        }</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">        for (String ttlPath : zkDb.getDataTree().getTtls()) {</span>
+<span class="nc" id="L211">            DataNode node = zkDb.getDataTree().getNode(ttlPath);</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">            if (node != null) {</span>
+<span class="nc" id="L213">                Set&lt;String&gt; children = node.getChildren();</span>
+<span class="nc bnc" id="L214" title="All 2 branches missed.">                if (children.isEmpty()) {</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">                    if (EphemeralType.get(node.stat.getEphemeralOwner()) == EphemeralType.TTL) {</span>
+<span class="nc" id="L216">                        long ttl = EphemeralType.TTL.getValue(node.stat.getEphemeralOwner());</span>
+<span class="nc bnc" id="L217" title="All 4 branches missed.">                        if ((ttl != 0) &amp;&amp; (getElapsed(node) &gt; ttl)) {</span>
+<span class="nc" id="L218">                            candidates.add(ttlPath);</span>
+                        }
+                    }
+                }
+            }
+<span class="nc" id="L223">        }</span>
+<span class="nc" id="L224">        return candidates;</span>
+    }
+
+    // VisibleForTesting
+    protected long getElapsed(DataNode node) {
+<span class="nc" id="L229">        return Time.currentWallTime() - node.stat.getMtime();</span>
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

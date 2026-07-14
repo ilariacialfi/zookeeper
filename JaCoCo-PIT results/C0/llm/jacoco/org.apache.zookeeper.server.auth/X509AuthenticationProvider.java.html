@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>X509AuthenticationProvider.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server.auth</a> &gt; <span class="el_source">X509AuthenticationProvider.java</span></div><h1>X509AuthenticationProvider.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server.auth;
+
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import javax.net.ssl.X509KeyManager;
+import javax.net.ssl.X509TrustManager;
+import javax.security.auth.x500.X500Principal;
+import javax.servlet.http.HttpServletRequest;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.common.ClientX509Util;
+import org.apache.zookeeper.common.X509Exception;
+import org.apache.zookeeper.common.X509Exception.KeyManagerException;
+import org.apache.zookeeper.common.X509Exception.TrustManagerException;
+import org.apache.zookeeper.common.X509Util;
+import org.apache.zookeeper.common.ZKConfig;
+import org.apache.zookeeper.data.Id;
+import org.apache.zookeeper.server.ServerCnxn;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * An AuthenticationProvider backed by an X509TrustManager and an X509KeyManager
+ * to perform remote host certificate authentication. The default algorithm is
+ * SunX509 and a JKS KeyStore. To specify the locations of the key store and
+ * trust store, set the following system properties:
+ * &lt;br&gt;&lt;code&gt;zookeeper.ssl.keyStore.location&lt;/code&gt;
+ * &lt;br&gt;&lt;code&gt;zookeeper.ssl.trustStore.location&lt;/code&gt;
+ * &lt;br&gt;To specify store passwords, set the following system properties:
+ * &lt;br&gt;&lt;code&gt;zookeeper.ssl.keyStore.password&lt;/code&gt;
+ * &lt;br&gt;&lt;code&gt;zookeeper.ssl.trustStore.password&lt;/code&gt;
+ * &lt;br&gt;Alternatively, the passwords can be specified by the following password file path properties:
+ * &lt;br&gt;&lt;code&gt;zookeeper.ssl.keyStore.passwordPath&lt;/code&gt;
+ * &lt;br&gt;&lt;code&gt;zookeeper.ssl.trustStore.passwordPath&lt;/code&gt;
+ * &lt;br&gt;Alternatively, this can be plugged with any X509TrustManager and
+ * X509KeyManager implementation.
+ */
+public class X509AuthenticationProvider implements AuthenticationProvider {
+
+    public static final String X509_CERTIFICATE_ATTRIBUTE_NAME = &quot;javax.servlet.request.X509Certificate&quot;;
+    static final String ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER = &quot;zookeeper.X509AuthenticationProvider.superUser&quot;;
+<span class="nc" id="L65">    private static final Logger LOG = LoggerFactory.getLogger(X509AuthenticationProvider.class);</span>
+    private final X509TrustManager trustManager;
+    private final X509KeyManager keyManager;
+
+    /**
+     * Initialize the X509AuthenticationProvider with a JKS KeyStore and JKS
+     * TrustStore according to the following system properties:
+     * &lt;br&gt;&lt;code&gt;zookeeper.ssl.keyStore.location&lt;/code&gt;
+     * &lt;br&gt;&lt;code&gt;zookeeper.ssl.trustStore.location&lt;/code&gt;
+     * &lt;br&gt;&lt;code&gt;zookeeper.ssl.keyStore.password&lt;/code&gt;
+     * &lt;br&gt;&lt;code&gt;zookeeper.ssl.keyStore.passwordPath&lt;/code&gt;
+     * &lt;br&gt;&lt;code&gt;zookeeper.ssl.trustStore.password&lt;/code&gt;
+     * &lt;br&gt;&lt;code&gt;zookeeper.ssl.trustStore.passwordPath&lt;/code&gt;
+     */
+<span class="nc" id="L79">    public X509AuthenticationProvider() throws X509Exception {</span>
+<span class="nc" id="L80">        ZKConfig config = new ZKConfig();</span>
+<span class="nc" id="L81">        try (X509Util x509Util = new ClientX509Util()) {</span>
+<span class="nc" id="L82">            X509KeyManager km = null;</span>
+<span class="nc" id="L83">            X509TrustManager tm = null;</span>
+
+            try {
+<span class="nc" id="L86">                km = x509Util.buildKeyManager(config);</span>
+<span class="nc" id="L87">            } catch (KeyManagerException e) {</span>
+<span class="nc" id="L88">                LOG.error(&quot;Failed to create key manager&quot;, e);</span>
+<span class="nc" id="L89">            }</span>
+
+            try {
+<span class="nc" id="L92">                tm = x509Util.buildTrustManager(config);</span>
+<span class="nc" id="L93">            } catch (TrustManagerException e) {</span>
+<span class="nc" id="L94">                LOG.error(&quot;Failed to create trust manager&quot;, e);</span>
+<span class="nc" id="L95">            }</span>
+
+<span class="nc" id="L97">            this.keyManager = km;</span>
+<span class="nc" id="L98">            this.trustManager = tm;</span>
+        }
+<span class="nc" id="L100">    }</span>
+
+    /**
+     * Initialize the X509AuthenticationProvider with the provided
+     * X509TrustManager and X509KeyManager.
+     *
+     * @param trustManager X509TrustManager implementation to use for remote
+     *                     host authentication.
+     * @param keyManager   X509KeyManager implementation to use for certificate
+     *                     management.
+     */
+<span class="nc" id="L111">    public X509AuthenticationProvider(X509TrustManager trustManager, X509KeyManager keyManager) {</span>
+<span class="nc" id="L112">        this.trustManager = trustManager;</span>
+<span class="nc" id="L113">        this.keyManager = keyManager;</span>
+<span class="nc" id="L114">    }</span>
+
+    @Override
+    public String getScheme() {
+<span class="nc" id="L118">        return &quot;x509&quot;;</span>
+    }
+
+    @Override
+    public KeeperException.Code handleAuthentication(ServerCnxn cnxn, byte[] authData) {
+<span class="nc" id="L123">        List&lt;Certificate&gt; certs = Arrays.asList(cnxn.getClientCertificateChain());</span>
+<span class="nc" id="L124">        X509Certificate[] certChain = certs.toArray(new X509Certificate[certs.size()]);</span>
+
+<span class="nc" id="L126">        final Collection&lt;Id&gt; ids = handleAuthentication(certChain);</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        if (ids.isEmpty()) {</span>
+<span class="nc" id="L128">            LOG.error(&quot;Failed to authenticate session 0x{}&quot;, Long.toHexString(cnxn.getSessionId()));</span>
+<span class="nc" id="L129">            return KeeperException.Code.AUTHFAILED;</span>
+        }
+
+<span class="nc bnc" id="L132" title="All 2 branches missed.">        for (Id id : ids) {</span>
+<span class="nc" id="L133">            cnxn.addAuthInfo(id);</span>
+<span class="nc" id="L134">        }</span>
+<span class="nc" id="L135">        return KeeperException.Code.OK;</span>
+    }
+
+    @Override
+    public List&lt;Id&gt; handleAuthentication(HttpServletRequest request, byte[] authData) {
+<span class="nc" id="L140">        final X509Certificate[] certChain =</span>
+<span class="nc" id="L141">                (X509Certificate[]) request.getAttribute(X509_CERTIFICATE_ATTRIBUTE_NAME);</span>
+<span class="nc" id="L142">        return handleAuthentication(certChain);</span>
+    }
+
+    /**
+     * Determine the string to be used as the remote host session Id for
+     * authorization purposes. Associate this client identifier with a
+     * ServerCnxn that has been authenticated over SSL, and any ACLs that refer
+     * to the authenticated client.
+     *
+     * @param clientCert Authenticated X509Certificate associated with the
+     *                   remote host.
+     * @return Identifier string to be associated with the client.
+     */
+    protected String getClientId(X509Certificate clientCert) {
+<span class="nc" id="L156">        return clientCert.getSubjectX500Principal().getName();</span>
+    }
+
+    @Override
+    public boolean matches(String id, String aclExpr) {
+<span class="nc bnc" id="L161" title="All 2 branches missed.">        if (System.getProperty(ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER) != null) {</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">            return id.equals(System.getProperty(ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER))</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">                   || id.equals(aclExpr);</span>
+        }
+
+<span class="nc" id="L166">        return id.equals(aclExpr);</span>
+    }
+
+    @Override
+    public boolean isAuthenticated() {
+<span class="nc" id="L171">        return true;</span>
+    }
+
+    @Override
+    public boolean isValid(String id) {
+        try {
+<span class="nc" id="L177">            new X500Principal(id);</span>
+<span class="nc" id="L178">            return true;</span>
+<span class="nc" id="L179">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L180">            return false;</span>
+        }
+    }
+
+    /**
+     * Get the X509TrustManager implementation used for remote host
+     * authentication.
+     *
+     * @return The X509TrustManager.
+     * @throws TrustManagerException When there is no trust manager available.
+     */
+    public X509TrustManager getTrustManager() throws TrustManagerException {
+<span class="nc bnc" id="L192" title="All 2 branches missed.">        if (trustManager == null) {</span>
+<span class="nc" id="L193">            throw new TrustManagerException(&quot;No trust manager available&quot;);</span>
+        }
+<span class="nc" id="L195">        return trustManager;</span>
+    }
+
+    /**
+     * Get the X509KeyManager implementation used for certificate management.
+     *
+     * @return The X509KeyManager.
+     * @throws KeyManagerException When there is no key manager available.
+     */
+    public X509KeyManager getKeyManager() throws KeyManagerException {
+<span class="nc bnc" id="L205" title="All 2 branches missed.">        if (keyManager == null) {</span>
+<span class="nc" id="L206">            throw new KeyManagerException(&quot;No key manager available&quot;);</span>
+        }
+<span class="nc" id="L208">        return keyManager;</span>
+    }
+
+    private List&lt;Id&gt; handleAuthentication(final X509Certificate[] certChain) {
+<span class="nc" id="L212">        final List&lt;Id&gt; ids = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L213" title="All 4 branches missed.">        if (certChain == null || certChain.length == 0) {</span>
+<span class="nc" id="L214">            LOG.warn(&quot;No certificate chain available to authenticate&quot;);</span>
+<span class="nc" id="L215">            return ids;</span>
+        }
+
+<span class="nc bnc" id="L218" title="All 2 branches missed.">        if (trustManager == null) {</span>
+<span class="nc" id="L219">            LOG.error(&quot;No trust manager available to authenticate&quot;);</span>
+<span class="nc" id="L220">            return ids;</span>
+        }
+
+<span class="nc" id="L223">        final X509Certificate clientCert = certChain[0];</span>
+        try {
+            // Authenticate client certificate
+<span class="nc" id="L226">            trustManager.checkClientTrusted(certChain, clientCert.getPublicKey().getAlgorithm());</span>
+<span class="nc" id="L227">        } catch (CertificateException ce) {</span>
+<span class="nc" id="L228">            LOG.error(&quot;Failed to trust certificate&quot;, ce);</span>
+<span class="nc" id="L229">            return ids;</span>
+<span class="nc" id="L230">        }</span>
+
+<span class="nc" id="L232">        final String clientId = getClientId(clientCert);</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">        if (clientId.equals(System.getProperty(ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER))) {</span>
+<span class="nc" id="L234">            ids.add(new Id(&quot;super&quot;, clientId));</span>
+<span class="nc" id="L235">            LOG.info(&quot;Authenticated Id '{}' as super user&quot;, clientId);</span>
+        }
+
+<span class="nc" id="L238">        final Id id = new Id(getScheme(), clientId);</span>
+<span class="nc" id="L239">        ids.add(id);</span>
+<span class="nc" id="L240">        LOG.info(&quot;Authenticated Id '{}' for scheme '{}'&quot;, id.getId(), id.getScheme());</span>
+<span class="nc" id="L241">        return Collections.unmodifiableList(ids);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

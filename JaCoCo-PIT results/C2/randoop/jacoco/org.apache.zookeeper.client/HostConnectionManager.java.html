@@ -1,0 +1,414 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>HostConnectionManager.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.client</a> &gt; <span class="el_source">HostConnectionManager.java</span></div><h1>HostConnectionManager.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.client;
+
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Random;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Manages ZooKeeper server connections with round-robin selection and load balancing during
+ * cluster reconfiguration.
+ *
+ * &lt;p&gt;&lt;strong&gt;Key Features:&lt;/strong&gt;&lt;/p&gt;
+ * &lt;ul&gt;
+ * &lt;li&gt;Round-robin server selection with IP address resolution&lt;/li&gt;
+ * &lt;li&gt;Migrates clients to balance load when servers are added or removed&lt;/li&gt;
+ * &lt;li&gt;Probabilistic client migration during server list updates&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;&lt;strong&gt;Reconfiguration Behavior:&lt;/strong&gt;&lt;/p&gt;
+ * When server list changes, enters &quot;reconfigMode&quot; and calculates migration probabilities
+ * to balance load between old and new servers.
+ *
+ * &lt;p&gt;See &lt;a href=&quot;https://issues.apache.org/jira/browse/ZOOKEEPER-1355&quot;&gt;ZOOKEEPER-1355&lt;/a&gt;
+ * for more details.&lt;/p&gt;
+ */
+@InterfaceAudience.Private
+public final class HostConnectionManager {
+
+    /**
+     * Interface for address resolution to support testing and different resolution strategies.
+     */
+    public interface Resolver {
+        InetAddress[] getAllByName(String name) throws UnknownHostException;
+    }
+
+<span class="nc" id="L62">    private static final Logger LOG = LoggerFactory.getLogger(HostConnectionManager.class);</span>
+
+    private List&lt;InetSocketAddress&gt; serverAddresses;
+    private final Random sourceOfRandomness;
+    private final Resolver resolver;
+    private final ZKClientConfig clientConfig;
+
+    private int lastIndex;
+    private int currentIndex;
+
+    /**
+     * The following fields are used to migrate clients during reconfiguration
+     */
+<span class="nc" id="L75">    private boolean reconfigMode = false;</span>
+<span class="nc" id="L76">    private final List&lt;InetSocketAddress&gt; oldServers = new ArrayList&lt;&gt;(5);</span>
+<span class="nc" id="L77">    private final List&lt;InetSocketAddress&gt; newServers = new ArrayList&lt;&gt;(5);</span>
+<span class="nc" id="L78">    private int currentIndexOld = -1;</span>
+<span class="nc" id="L79">    private int currentIndexNew = -1;</span>
+    private float pOld, pNew;
+
+    /**
+     * Constructs a HostConnectionManager with default resolver.
+     *
+     * @param serverAddresses
+     *              possibly unresolved ZooKeeper server addresses
+     *  @param randomnessSeed
+     *              a seed used to initialize sourceOfRandomness
+     * @param clientConfig
+     *              ZooKeeper client configuration
+     * @throws IllegalArgumentException
+     *              if serverAddresses is empty
+     */
+    public HostConnectionManager(Collection&lt;InetSocketAddress&gt; serverAddresses, long randomnessSeed, ZKClientConfig clientConfig) {
+<span class="nc" id="L95">        this(serverAddresses, randomnessSeed, null, clientConfig);</span>
+<span class="nc" id="L96">    }</span>
+
+    /**
+     * Constructs a HostConnectionManager with custom resolver.
+     *
+     * @param serverAddresses
+     *              possibly unresolved ZooKeeper server addresses
+     * @param randomnessSeed
+     *              a seed used to initialize sourceOfRandomness
+     * @param resolver
+     *              custom resolver implementation
+     * @param clientConfig
+     *              ZooKeeper client configuration
+     * @throws IllegalArgumentException
+     *              if serverAddresses is empty
+     */
+    public HostConnectionManager(Collection&lt;InetSocketAddress&gt; serverAddresses,
+                                long randomnessSeed,
+                                Resolver resolver,
+<span class="nc" id="L115">                                ZKClientConfig clientConfig) {</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">        if (serverAddresses.isEmpty()) {</span>
+<span class="nc" id="L117">            throw new IllegalArgumentException(&quot;A HostProvider may not be empty!&quot;);</span>
+        }
+<span class="nc" id="L119">        this.sourceOfRandomness = new Random(randomnessSeed);</span>
+<span class="nc" id="L120">        this.serverAddresses = shuffle(serverAddresses);</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">        this.resolver = resolver == null ? InetAddress::getAllByName : resolver;</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">        this.clientConfig = clientConfig == null ? new ZKClientConfig() : clientConfig;</span>
+
+<span class="nc" id="L124">        currentIndex = -1;</span>
+<span class="nc" id="L125">        lastIndex = -1;</span>
+
+<span class="nc" id="L127">        LOG.info(&quot;HostConnectionManager initialized with {} servers&quot;, serverAddresses.size());</span>
+<span class="nc" id="L128">    }</span>
+
+    /**
+     * Update the list of servers. This returns true if changing connections is necessary for load-balancing, false
+     * otherwise. Changing connections is necessary if one of the following holds:
+     * a) the host to which this client is currently connected is not in serverAddresses.
+     *    Otherwise (if currentHost is in the new list serverAddresses):
+     * b) the number of servers in the cluster is increasing - in this case the load on currentHost should decrease,
+     *    which means that SOME of the clients connected to it will migrate to the new servers. The decision whether
+     *    this client migrates or not (i.e., whether true or false is returned) is probabilistic so that the expected
+     *    number of clients connected to each server is the same.
+     *
+     * If true is returned, the function sets pOld and pNew that correspond to the probability to migrate to one of the
+     * new servers in serverAddresses or one of the old servers (migrating to one of the old servers is done only
+     * if our client's currentHost is not in serverAddresses). See nextHostInReconfigMode for the selection logic.
+     *
+     * See &lt;a href=&quot;https://issues.apache.org/jira/browse/ZOOKEEPER-1355&quot;&gt;ZOOKEEPER-1355&lt;/a&gt;
+     * for the protocol and its evaluation.
+     *
+     * @param serverAddresses
+     *              new host list
+     * @param currentHost
+     *              the host to which this client is currently connected
+     * @return true if changing connections is necessary for load-balancing, false otherwise
+     */
+    synchronized boolean updateServerList(Collection&lt;InetSocketAddress&gt; serverAddresses, InetSocketAddress currentHost) {
+<span class="nc" id="L154">        List&lt;InetSocketAddress&gt; shuffledList = shuffle(serverAddresses);</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">        if (shuffledList.isEmpty()) {</span>
+<span class="nc" id="L156">            throw new IllegalArgumentException(&quot;The server list may not be empty!&quot;);</span>
+        }
+
+<span class="nc" id="L159">        int oldSize = this.serverAddresses.size();</span>
+<span class="nc" id="L160">        int newSize = shuffledList.size();</span>
+
+        // Check if client's current server is in the new list of servers
+<span class="nc" id="L163">        boolean myServerInNewConfig = false;</span>
+<span class="nc" id="L164">        InetSocketAddress myServer = currentHost;</span>
+
+        // choose &quot;current&quot; server according to the client rebalancing algorithm
+<span class="nc bnc" id="L167" title="All 2 branches missed.">        if (reconfigMode) {</span>
+<span class="nc" id="L168">            myServer = next(0);</span>
+        }
+
+        // if the client is not currently connected to any server
+<span class="nc bnc" id="L172" title="All 2 branches missed.">        if (myServer == null) {</span>
+            // reconfigMode = false (next shouldn't return null).
+<span class="nc bnc" id="L174" title="All 2 branches missed.">            if (lastIndex &gt;= 0) {</span>
+                // take the last server to which we were connected
+<span class="nc" id="L176">                myServer = this.serverAddresses.get(lastIndex);</span>
+            } else {
+                // take the first server on the list
+<span class="nc" id="L179">                myServer = this.serverAddresses.get(0);</span>
+            }
+        }
+
+<span class="nc bnc" id="L183" title="All 2 branches missed.">        for (InetSocketAddress addr : shuffledList) {</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">            if (addr.getPort() == myServer.getPort()</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">                &amp;&amp; ((addr.getAddress() != null</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">                     &amp;&amp; myServer.getAddress() != null</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">                     &amp;&amp; addr.getAddress().equals(myServer.getAddress()))</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">                    || addr.getHostString().equals(myServer.getHostString()))) {</span>
+<span class="nc" id="L189">                myServerInNewConfig = true;</span>
+<span class="nc" id="L190">                break;</span>
+            }
+<span class="nc" id="L192">        }</span>
+
+<span class="nc" id="L194">        reconfigMode = true;</span>
+
+<span class="nc" id="L196">        newServers.clear();</span>
+<span class="nc" id="L197">        oldServers.clear();</span>
+        // Divide the new servers into oldServers that were in the previous list
+        // and newServers that were not in the previous list
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        for (InetSocketAddress address : shuffledList) {</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">            if (this.serverAddresses.contains(address)) {</span>
+<span class="nc" id="L202">                oldServers.add(address);</span>
+            } else {
+<span class="nc" id="L204">                newServers.add(address);</span>
+            }
+<span class="nc" id="L206">        }</span>
+
+<span class="nc" id="L208">        int numOld = oldServers.size();</span>
+<span class="nc" id="L209">        int numNew = newServers.size();</span>
+
+        // number of servers increased
+<span class="nc bnc" id="L212" title="All 2 branches missed.">        if (numOld + numNew &gt; this.serverAddresses.size()) {</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">            if (myServerInNewConfig) {</span>
+                // my server is in new config, but load should be decreased.
+                // Need to decide if this client
+                // is moving to one of the new servers
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                if (sourceOfRandomness.nextFloat() &lt;= (1 - ((float) this.serverAddresses.size()) / (numOld + numNew))) {</span>
+<span class="nc" id="L218">                    pNew = 1;</span>
+<span class="nc" id="L219">                    pOld = 0;</span>
+                } else {
+                    // do nothing special - stay with the current server
+<span class="nc" id="L222">                    reconfigMode = false;</span>
+                }
+            } else {
+                // my server is not in new config, and load on old servers must
+                // be decreased, so connect to
+                // one of the new servers
+<span class="nc" id="L228">                pNew = 1;</span>
+<span class="nc" id="L229">                pOld = 0;</span>
+            }
+        } else { // number of servers stayed the same or decreased
+<span class="nc bnc" id="L232" title="All 2 branches missed.">            if (myServerInNewConfig) {</span>
+                // my server is in new config, and load should be increased, so
+                // stay with this server and do nothing special
+<span class="nc" id="L235">                reconfigMode = false;</span>
+            } else {
+<span class="nc" id="L237">                pOld = ((float) (numOld * (this.serverAddresses.size() - (numOld + numNew))))</span>
+<span class="nc" id="L238">                       / ((numOld + numNew) * (this.serverAddresses.size() - numOld));</span>
+<span class="nc" id="L239">                pNew = 1 - pOld;</span>
+            }
+        }
+
+<span class="nc bnc" id="L243" title="All 2 branches missed.">        if (!reconfigMode) {</span>
+<span class="nc" id="L244">            currentIndex = shuffledList.indexOf(getServerAtCurrentIndex());</span>
+        } else {
+<span class="nc" id="L246">            currentIndex = -1;</span>
+        }
+<span class="nc" id="L248">        this.serverAddresses = shuffledList;</span>
+<span class="nc" id="L249">        currentIndexOld = -1;</span>
+<span class="nc" id="L250">        currentIndexNew = -1;</span>
+<span class="nc" id="L251">        lastIndex = currentIndex;</span>
+
+<span class="nc" id="L253">        LOG.info(&quot;Server list updated: oldSize={}, newSize={}, reconfigMode={}&quot;, oldSize, newSize, reconfigMode);</span>
+
+<span class="nc" id="L255">        return reconfigMode;</span>
+    }
+
+    /**
+     * Get the next server to connect to.
+     *
+     * @param spinDelay milliseconds to wait if all hosts have been tried once
+     * @return the next server address to connect to
+     */
+    InetSocketAddress next(long spinDelay) {
+<span class="nc" id="L265">        boolean needToSleep = false;</span>
+        InetSocketAddress addr;
+
+<span class="nc" id="L268">        synchronized (this) {</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">            if (reconfigMode) {</span>
+<span class="nc" id="L270">                addr = nextHostInReconfigMode();</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">                if (addr != null) {</span>
+<span class="nc" id="L272">                    currentIndex = serverAddresses.indexOf(addr);</span>
+<span class="nc" id="L273">                    return resolve(addr);</span>
+                }
+                //tried all servers and couldn't connect
+<span class="nc" id="L276">                reconfigMode = false;</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">                needToSleep = (spinDelay &gt; 0);</span>
+            }
+<span class="nc" id="L279">            ++currentIndex;</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">            if (currentIndex == serverAddresses.size()) {</span>
+<span class="nc" id="L281">                currentIndex = 0;</span>
+            }
+<span class="nc" id="L283">            addr = serverAddresses.get(currentIndex);</span>
+<span class="nc bnc" id="L284" title="All 6 branches missed.">            needToSleep = needToSleep || (currentIndex == lastIndex &amp;&amp; spinDelay &gt; 0);</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">            if (lastIndex == -1) {</span>
+                // We don't want to sleep on the first ever connect attempt.
+<span class="nc" id="L287">                lastIndex = 0;</span>
+            }
+<span class="nc" id="L289">        }</span>
+
+<span class="nc bnc" id="L291" title="All 2 branches missed.">        if (needToSleep) {</span>
+            try {
+<span class="nc" id="L293">                Thread.sleep(spinDelay);</span>
+<span class="nc" id="L294">            } catch (InterruptedException e) {</span>
+<span class="nc" id="L295">                LOG.warn(&quot;Unexpected exception&quot;, e);</span>
+<span class="nc" id="L296">            }</span>
+        }
+
+<span class="nc" id="L299">        return resolve(addr);</span>
+    }
+
+    /**
+     * Notify that a connection has been established successfully.
+     */
+    synchronized void onConnected() {
+<span class="nc" id="L306">        lastIndex = currentIndex;</span>
+<span class="nc" id="L307">        reconfigMode = false;</span>
+<span class="nc" id="L308">    }</span>
+
+    /**
+     * Get the server at the specified index.
+     *
+     * @param i the index
+     * @return the server address at the index, or null if index is out of bounds
+     */
+    synchronized InetSocketAddress getServerAtIndex(int i) {
+<span class="nc bnc" id="L317" title="All 4 branches missed.">        if (i &lt; 0 || i &gt;= serverAddresses.size()) {</span>
+<span class="nc" id="L318">            return null;</span>
+        }
+<span class="nc" id="L320">        return serverAddresses.get(i);</span>
+    }
+
+    /**
+     * Get the server at the current index.
+     *
+     * @return the server address at the current index
+     */
+    synchronized InetSocketAddress getServerAtCurrentIndex() {
+<span class="nc" id="L329">        return getServerAtIndex(currentIndex);</span>
+    }
+
+    /**
+     * Get the number of servers in the list.
+     *
+     * @return the number of servers
+     */
+    synchronized int size() {
+<span class="nc" id="L338">        return serverAddresses.size();</span>
+    }
+
+    /**
+     * Resolves an InetSocketAddress to a concrete address.
+     *
+     * @param address
+     *              the address to resolve
+     * @return resolved address or original address if resolution fails
+     */
+    private InetSocketAddress resolve(InetSocketAddress address) {
+        try {
+<span class="nc" id="L350">            String curHostString = address.getHostString();</span>
+<span class="nc" id="L351">            List&lt;InetAddress&gt; resolvedAddresses = new ArrayList&lt;&gt;(Arrays.asList(this.resolver.getAllByName(curHostString)));</span>
+<span class="nc bnc" id="L352" title="All 2 branches missed.">            if (resolvedAddresses.isEmpty()) {</span>
+<span class="nc" id="L353">                return address;</span>
+            }
+<span class="nc bnc" id="L355" title="All 2 branches missed.">            if (clientConfig.isShuffleDnsResponseEnabled()) {</span>
+<span class="nc" id="L356">                Collections.shuffle(resolvedAddresses);</span>
+            }
+<span class="nc" id="L358">            return new InetSocketAddress(resolvedAddresses.get(0), address.getPort());</span>
+<span class="nc" id="L359">        } catch (UnknownHostException e) {</span>
+<span class="nc" id="L360">            LOG.error(&quot;Unable to resolve address: {}&quot;, address, e);</span>
+<span class="nc" id="L361">            return address;</span>
+        }
+    }
+
+    /**
+     * Shuffles the server addresses using the internal random source.
+     *
+     * @param serverAddresses
+     *              collection of server addresses to shuffle
+     * @return shuffled list of server addresses
+     */
+    private List&lt;InetSocketAddress&gt; shuffle(Collection&lt;InetSocketAddress&gt; serverAddresses) {
+<span class="nc" id="L373">        List&lt;InetSocketAddress&gt; tmpList = new ArrayList&lt;&gt;(serverAddresses.size());</span>
+<span class="nc" id="L374">        tmpList.addAll(serverAddresses);</span>
+<span class="nc" id="L375">        Collections.shuffle(tmpList, sourceOfRandomness);</span>
+<span class="nc" id="L376">        return tmpList;</span>
+    }
+
+    /**
+     * Get the next server to connect to, when in &quot;reconfigMode&quot;, which means that
+     * you've just updated the server list, and now trying to find some server to connect to.
+     * Once onConnected() is called, reconfigMode is set to false. Similarly, if we tried to connect
+     * to all servers in new config and failed, reconfigMode is set to false.
+     *
+     * While in reconfigMode, we should connect to a server in newServers with probability pNew and to servers in
+     * oldServers with probability pOld (which is just 1-pNew). If we tried out all servers in either oldServers
+     * or newServers we continue to try servers from the other set, regardless of pNew or pOld. If we tried all servers
+     * we give up and go back to the normal round robin mode
+     *
+     * When called, this should be protected by synchronized(this)
+     */
+    private InetSocketAddress nextHostInReconfigMode() {
+<span class="nc bnc" id="L393" title="All 2 branches missed.">        boolean takeNew = (sourceOfRandomness.nextFloat() &lt;= pNew);</span>
+
+        // take one of the new servers if it is possible (there are still such
+        // servers we didn't try),
+        // and either the probability tells us to connect to one of the new
+        // servers or if we already
+        // tried all the old servers
+<span class="nc bnc" id="L400" title="All 6 branches missed.">        if (((currentIndexNew + 1) &lt; newServers.size()) &amp;&amp; (takeNew || (currentIndexOld + 1) &gt;= oldServers.size())) {</span>
+<span class="nc" id="L401">            ++currentIndexNew;</span>
+<span class="nc" id="L402">            return newServers.get(currentIndexNew);</span>
+        }
+
+        // start taking old servers
+<span class="nc bnc" id="L406" title="All 2 branches missed.">        if ((currentIndexOld + 1) &lt; oldServers.size()) {</span>
+<span class="nc" id="L407">            ++currentIndexOld;</span>
+<span class="nc" id="L408">            return oldServers.get(currentIndexOld);</span>
+        }
+
+<span class="nc" id="L411">        return null;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

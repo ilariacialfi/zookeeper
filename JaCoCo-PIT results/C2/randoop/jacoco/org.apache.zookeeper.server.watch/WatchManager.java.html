@@ -1,0 +1,377 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WatchManager.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server.watch</a> &gt; <span class="el_source">WatchManager.java</span></div><h1>WatchManager.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server.watch;
+
+import java.io.PrintWriter;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.Watcher.Event.EventType;
+import org.apache.zookeeper.Watcher.Event.KeeperState;
+import org.apache.zookeeper.data.ACL;
+import org.apache.zookeeper.server.ServerCnxn;
+import org.apache.zookeeper.server.ServerMetrics;
+import org.apache.zookeeper.server.ServerWatcher;
+import org.apache.zookeeper.server.ZooTrace;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * This class manages watches. It allows watches to be associated with a string
+ * and removes watchers and their watches in addition to managing triggers.
+ */
+<span class="nc" id="L46">public class WatchManager implements IWatchManager {</span>
+
+<span class="nc" id="L48">    private static final Logger LOG = LoggerFactory.getLogger(WatchManager.class);</span>
+
+<span class="nc" id="L50">    private final Map&lt;String, Set&lt;Watcher&gt;&gt; watchTable = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L52">    private final Map&lt;Watcher, Map&lt;String, WatchStats&gt;&gt; watch2Paths = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L54">    private int recursiveWatchQty = 0;</span>
+
+    @Override
+    public synchronized int size() {
+<span class="nc" id="L58">        int result = 0;</span>
+<span class="nc bnc" id="L59" title="All 2 branches missed.">        for (Set&lt;Watcher&gt; watches : watchTable.values()) {</span>
+<span class="nc" id="L60">            result += watches.size();</span>
+<span class="nc" id="L61">        }</span>
+<span class="nc" id="L62">        return result;</span>
+    }
+
+    private boolean isDeadWatcher(Watcher watcher) {
+<span class="nc bnc" id="L66" title="All 4 branches missed.">        return watcher instanceof ServerCnxn &amp;&amp; ((ServerCnxn) watcher).isStale();</span>
+    }
+
+    @Override
+    public boolean addWatch(String path, Watcher watcher) {
+<span class="nc" id="L71">        return addWatch(path, watcher, WatcherMode.DEFAULT_WATCHER_MODE);</span>
+    }
+
+    @Override
+    public synchronized boolean addWatch(String path, Watcher watcher, WatcherMode watcherMode) {
+<span class="nc bnc" id="L76" title="All 2 branches missed.">        if (isDeadWatcher(watcher)) {</span>
+<span class="nc" id="L77">            LOG.debug(&quot;Ignoring addWatch with closed cnxn&quot;);</span>
+<span class="nc" id="L78">            return false;</span>
+        }
+
+<span class="nc" id="L81">        Set&lt;Watcher&gt; list = watchTable.get(path);</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">        if (list == null) {</span>
+            // don't waste memory if there are few watches on a node
+            // rehash when the 4th entry is added, doubling size thereafter
+            // seems like a good compromise
+<span class="nc" id="L86">            list = new HashSet&lt;&gt;(4);</span>
+<span class="nc" id="L87">            watchTable.put(path, list);</span>
+        }
+<span class="nc" id="L89">        list.add(watcher);</span>
+
+<span class="nc" id="L91">        Map&lt;String, WatchStats&gt; paths = watch2Paths.get(watcher);</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">        if (paths == null) {</span>
+            // cnxns typically have many watches, so use default cap here
+<span class="nc" id="L94">            paths = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L95">            watch2Paths.put(watcher, paths);</span>
+        }
+
+<span class="nc" id="L98">        WatchStats stats = paths.getOrDefault(path, WatchStats.NONE);</span>
+<span class="nc" id="L99">        WatchStats newStats = stats.addMode(watcherMode);</span>
+
+<span class="nc bnc" id="L101" title="All 2 branches missed.">        if (newStats != stats) {</span>
+<span class="nc" id="L102">            paths.put(path, newStats);</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">            if (watcherMode.isRecursive()) {</span>
+<span class="nc" id="L104">                ++recursiveWatchQty;</span>
+            }
+<span class="nc" id="L106">            return true;</span>
+        }
+
+<span class="nc" id="L109">        return false;</span>
+    }
+
+    @Override
+    public synchronized void removeWatcher(Watcher watcher) {
+<span class="nc" id="L114">        Map&lt;String, WatchStats&gt; paths = watch2Paths.remove(watcher);</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">        if (paths == null) {</span>
+<span class="nc" id="L116">            return;</span>
+        }
+<span class="nc bnc" id="L118" title="All 2 branches missed.">        for (String p : paths.keySet()) {</span>
+<span class="nc" id="L119">            Set&lt;Watcher&gt; list = watchTable.get(p);</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">            if (list != null) {</span>
+<span class="nc" id="L121">                list.remove(watcher);</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">                if (list.isEmpty()) {</span>
+<span class="nc" id="L123">                    watchTable.remove(p);</span>
+                }
+            }
+<span class="nc" id="L126">        }</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        for (WatchStats stats : paths.values()) {</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">            if (stats.hasMode(WatcherMode.PERSISTENT_RECURSIVE)) {</span>
+<span class="nc" id="L129">                --recursiveWatchQty;</span>
+            }
+<span class="nc" id="L131">        }</span>
+<span class="nc" id="L132">    }</span>
+
+    @Override
+    public WatcherOrBitSet triggerWatch(String path, EventType type, long zxid, List&lt;ACL&gt; acl) {
+<span class="nc" id="L136">        return triggerWatch(path, type, zxid, acl, null);</span>
+    }
+
+    @Override
+    public WatcherOrBitSet triggerWatch(String path, EventType type, long zxid, List&lt;ACL&gt; acl, WatcherOrBitSet suppress) {
+<span class="nc" id="L141">        WatchedEvent e = new WatchedEvent(type, KeeperState.SyncConnected, path, zxid);</span>
+<span class="nc" id="L142">        Set&lt;Watcher&gt; watchers = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L143">        synchronized (this) {</span>
+<span class="nc" id="L144">            PathParentIterator pathParentIterator = getPathParentIterator(path);</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">            for (String localPath : pathParentIterator.asIterable()) {</span>
+<span class="nc" id="L146">                Set&lt;Watcher&gt; thisWatchers = watchTable.get(localPath);</span>
+<span class="nc bnc" id="L147" title="All 4 branches missed.">                if (thisWatchers == null || thisWatchers.isEmpty()) {</span>
+<span class="nc" id="L148">                    continue;</span>
+                }
+<span class="nc" id="L150">                Iterator&lt;Watcher&gt; iterator = thisWatchers.iterator();</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">                while (iterator.hasNext()) {</span>
+<span class="nc" id="L152">                    Watcher watcher = iterator.next();</span>
+<span class="nc" id="L153">                    Map&lt;String, WatchStats&gt; paths = watch2Paths.getOrDefault(watcher, Collections.emptyMap());</span>
+<span class="nc" id="L154">                    WatchStats stats = paths.get(localPath);</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">                    if (stats == null) {</span>
+<span class="nc" id="L156">                        LOG.warn(&quot;inconsistent watch table for watcher {}, {} not in path list&quot;, watcher, localPath);</span>
+<span class="nc" id="L157">                        continue;</span>
+                    }
+<span class="nc bnc" id="L159" title="All 2 branches missed.">                    if (!pathParentIterator.atParentPath()) {</span>
+<span class="nc" id="L160">                        watchers.add(watcher);</span>
+<span class="nc" id="L161">                        WatchStats newStats = stats.removeMode(WatcherMode.STANDARD);</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">                        if (newStats == WatchStats.NONE) {</span>
+<span class="nc" id="L163">                            iterator.remove();</span>
+<span class="nc" id="L164">                            paths.remove(localPath);</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">                        } else if (newStats != stats) {</span>
+<span class="nc" id="L166">                            paths.put(localPath, newStats);</span>
+                        }
+<span class="nc bnc" id="L168" title="All 2 branches missed.">                    } else if (stats.hasMode(WatcherMode.PERSISTENT_RECURSIVE)) {</span>
+<span class="nc" id="L169">                        watchers.add(watcher);</span>
+                    }
+<span class="nc" id="L171">                }</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">                if (thisWatchers.isEmpty()) {</span>
+<span class="nc" id="L173">                    watchTable.remove(localPath);</span>
+                }
+<span class="nc" id="L175">            }</span>
+<span class="nc" id="L176">        }</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">        if (watchers.isEmpty()) {</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">            if (LOG.isTraceEnabled()) {</span>
+<span class="nc" id="L179">                ZooTrace.logTraceMessage(LOG, ZooTrace.EVENT_DELIVERY_TRACE_MASK, &quot;No watchers for &quot; + path);</span>
+            }
+<span class="nc" id="L181">            return null;</span>
+        }
+
+<span class="nc bnc" id="L184" title="All 2 branches missed.">        for (Watcher w : watchers) {</span>
+<span class="nc bnc" id="L185" title="All 4 branches missed.">            if (suppress != null &amp;&amp; suppress.contains(w)) {</span>
+<span class="nc" id="L186">                continue;</span>
+            }
+<span class="nc bnc" id="L188" title="All 2 branches missed.">            if (w instanceof ServerWatcher) {</span>
+<span class="nc" id="L189">                ((ServerWatcher) w).process(e, acl);</span>
+            } else {
+<span class="nc" id="L191">                w.process(e);</span>
+            }
+<span class="nc" id="L193">        }</span>
+
+<span class="nc bnc" id="L195" title="All 5 branches missed.">        switch (type) {</span>
+            case NodeCreated:
+<span class="nc" id="L197">                ServerMetrics.getMetrics().NODE_CREATED_WATCHER.add(watchers.size());</span>
+<span class="nc" id="L198">                break;</span>
+
+            case NodeDeleted:
+<span class="nc" id="L201">                ServerMetrics.getMetrics().NODE_DELETED_WATCHER.add(watchers.size());</span>
+<span class="nc" id="L202">                break;</span>
+
+            case NodeDataChanged:
+<span class="nc" id="L205">                ServerMetrics.getMetrics().NODE_CHANGED_WATCHER.add(watchers.size());</span>
+<span class="nc" id="L206">                break;</span>
+
+            case NodeChildrenChanged:
+<span class="nc" id="L209">                ServerMetrics.getMetrics().NODE_CHILDREN_WATCHER.add(watchers.size());</span>
+<span class="nc" id="L210">                break;</span>
+            default:
+                // Other types not logged.
+                break;
+        }
+
+<span class="nc" id="L216">        return new WatcherOrBitSet(watchers);</span>
+    }
+
+    @Override
+    public synchronized String toString() {
+<span class="nc" id="L221">        StringBuilder sb = new StringBuilder();</span>
+
+<span class="nc" id="L223">        sb.append(watch2Paths.size()).append(&quot; connections watching &quot;).append(watchTable.size()).append(&quot; paths\n&quot;);</span>
+
+<span class="nc" id="L225">        int total = 0;</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">        for (Map&lt;String, WatchStats&gt; paths : watch2Paths.values()) {</span>
+<span class="nc" id="L227">            total += paths.size();</span>
+<span class="nc" id="L228">        }</span>
+<span class="nc" id="L229">        sb.append(&quot;Total watches:&quot;).append(total);</span>
+
+<span class="nc" id="L231">        return sb.toString();</span>
+    }
+
+    @Override
+    public synchronized void dumpWatches(PrintWriter pwriter, boolean byPath) {
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        if (byPath) {</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">            for (Entry&lt;String, Set&lt;Watcher&gt;&gt; e : watchTable.entrySet()) {</span>
+<span class="nc" id="L238">                pwriter.println(e.getKey());</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">                for (Watcher w : e.getValue()) {</span>
+<span class="nc" id="L240">                    pwriter.print(&quot;\t0x&quot;);</span>
+<span class="nc" id="L241">                    pwriter.print(Long.toHexString(((ServerCnxn) w).getSessionId()));</span>
+<span class="nc" id="L242">                    pwriter.print(&quot;\n&quot;);</span>
+<span class="nc" id="L243">                }</span>
+<span class="nc" id="L244">            }</span>
+        } else {
+<span class="nc bnc" id="L246" title="All 2 branches missed.">            for (Entry&lt;Watcher, Map&lt;String, WatchStats&gt;&gt; e : watch2Paths.entrySet()) {</span>
+<span class="nc" id="L247">                pwriter.print(&quot;0x&quot;);</span>
+<span class="nc" id="L248">                pwriter.println(Long.toHexString(((ServerCnxn) e.getKey()).getSessionId()));</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">                for (String path : e.getValue().keySet()) {</span>
+<span class="nc" id="L250">                    pwriter.print(&quot;\t&quot;);</span>
+<span class="nc" id="L251">                    pwriter.println(path);</span>
+<span class="nc" id="L252">                }</span>
+<span class="nc" id="L253">            }</span>
+        }
+<span class="nc" id="L255">    }</span>
+
+    @Override
+    public synchronized boolean containsWatcher(String path, Watcher watcher) {
+<span class="nc" id="L259">        return containsWatcher(path, watcher, null);</span>
+    }
+
+    @Override
+    public synchronized boolean containsWatcher(String path, Watcher watcher, WatcherMode watcherMode) {
+<span class="nc" id="L264">        Map&lt;String, WatchStats&gt; paths = watch2Paths.get(watcher);</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (paths == null) {</span>
+<span class="nc" id="L266">            return false;</span>
+        }
+<span class="nc" id="L268">        WatchStats stats = paths.get(path);</span>
+<span class="nc bnc" id="L269" title="All 6 branches missed.">        return stats != null &amp;&amp; (watcherMode == null || stats.hasMode(watcherMode));</span>
+    }
+
+    private WatchStats unwatch(String path, Watcher watcher, Map&lt;String, WatchStats&gt; paths, Set&lt;Watcher&gt; watchers) {
+<span class="nc" id="L273">        WatchStats stats = paths.remove(path);</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        if (stats == null) {</span>
+<span class="nc" id="L275">            return WatchStats.NONE;</span>
+        }
+<span class="nc bnc" id="L277" title="All 2 branches missed.">        if (paths.isEmpty()) {</span>
+<span class="nc" id="L278">            watch2Paths.remove(watcher);</span>
+        }
+<span class="nc" id="L280">        watchers.remove(watcher);</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        if (watchers.isEmpty()) {</span>
+<span class="nc" id="L282">            watchTable.remove(path);</span>
+        }
+<span class="nc" id="L284">        return stats;</span>
+    }
+
+    @Override
+    public synchronized boolean removeWatcher(String path, Watcher watcher, WatcherMode watcherMode) {
+<span class="nc" id="L289">        Map&lt;String, WatchStats&gt; paths = watch2Paths.get(watcher);</span>
+<span class="nc" id="L290">        Set&lt;Watcher&gt; watchers = watchTable.get(path);</span>
+<span class="nc bnc" id="L291" title="All 4 branches missed.">        if (paths == null || watchers == null) {</span>
+<span class="nc" id="L292">            return false;</span>
+        }
+
+        WatchStats oldStats;
+        WatchStats newStats;
+<span class="nc bnc" id="L297" title="All 2 branches missed.">        if (watcherMode != null) {</span>
+<span class="nc" id="L298">            oldStats = paths.getOrDefault(path, WatchStats.NONE);</span>
+<span class="nc" id="L299">            newStats = oldStats.removeMode(watcherMode);</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">            if (newStats != WatchStats.NONE) {</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">                if (newStats != oldStats) {</span>
+<span class="nc" id="L302">                    paths.put(path, newStats);</span>
+                }
+<span class="nc bnc" id="L304" title="All 2 branches missed.">            } else if (oldStats != WatchStats.NONE) {</span>
+<span class="nc" id="L305">                unwatch(path, watcher, paths, watchers);</span>
+            }
+        } else {
+<span class="nc" id="L308">            oldStats = unwatch(path, watcher, paths, watchers);</span>
+<span class="nc" id="L309">            newStats = WatchStats.NONE;</span>
+        }
+
+<span class="nc bnc" id="L312" title="All 4 branches missed.">        if (oldStats.hasMode(WatcherMode.PERSISTENT_RECURSIVE) &amp;&amp; !newStats.hasMode(WatcherMode.PERSISTENT_RECURSIVE)) {</span>
+<span class="nc" id="L313">            --recursiveWatchQty;</span>
+        }
+
+<span class="nc bnc" id="L316" title="All 2 branches missed.">        return oldStats != newStats;</span>
+    }
+
+    @Override
+    public synchronized boolean removeWatcher(String path, Watcher watcher) {
+<span class="nc" id="L321">        return removeWatcher(path, watcher, null);</span>
+    }
+
+    // VisibleForTesting
+    Map&lt;Watcher, Map&lt;String, WatchStats&gt;&gt; getWatch2Paths() {
+<span class="nc" id="L326">        return watch2Paths;</span>
+    }
+
+    @Override
+    public synchronized WatchesReport getWatches() {
+<span class="nc" id="L331">        Map&lt;Long, Set&lt;String&gt;&gt; id2paths = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L332" title="All 2 branches missed.">        for (Entry&lt;Watcher, Map&lt;String, WatchStats&gt;&gt; e : watch2Paths.entrySet()) {</span>
+<span class="nc" id="L333">            Long id = ((ServerCnxn) e.getKey()).getSessionId();</span>
+<span class="nc" id="L334">            Set&lt;String&gt; paths = new HashSet&lt;&gt;(e.getValue().keySet());</span>
+<span class="nc" id="L335">            id2paths.put(id, paths);</span>
+<span class="nc" id="L336">        }</span>
+<span class="nc" id="L337">        return new WatchesReport(id2paths);</span>
+    }
+
+    @Override
+    public synchronized WatchesPathReport getWatchesByPath() {
+<span class="nc" id="L342">        Map&lt;String, Set&lt;Long&gt;&gt; path2ids = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">        for (Entry&lt;String, Set&lt;Watcher&gt;&gt; e : watchTable.entrySet()) {</span>
+<span class="nc" id="L344">            Set&lt;Long&gt; ids = new HashSet&lt;&gt;(e.getValue().size());</span>
+<span class="nc" id="L345">            path2ids.put(e.getKey(), ids);</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">            for (Watcher watcher : e.getValue()) {</span>
+<span class="nc" id="L347">                ids.add(((ServerCnxn) watcher).getSessionId());</span>
+<span class="nc" id="L348">            }</span>
+<span class="nc" id="L349">        }</span>
+<span class="nc" id="L350">        return new WatchesPathReport(path2ids);</span>
+    }
+
+    @Override
+    public synchronized WatchesSummary getWatchesSummary() {
+<span class="nc" id="L355">        int totalWatches = 0;</span>
+<span class="nc bnc" id="L356" title="All 2 branches missed.">        for (Map&lt;String, WatchStats&gt; paths : watch2Paths.values()) {</span>
+<span class="nc" id="L357">            totalWatches += paths.size();</span>
+<span class="nc" id="L358">        }</span>
+<span class="nc" id="L359">        return new WatchesSummary(watch2Paths.size(), watchTable.size(), totalWatches);</span>
+    }
+
+    @Override
+<span class="nc" id="L363">    public void shutdown() { /* do nothing */ }</span>
+
+    // VisibleForTesting
+    synchronized int getRecursiveWatchQty() {
+<span class="nc" id="L367">        return recursiveWatchQty;</span>
+    }
+
+    private PathParentIterator getPathParentIterator(String path) {
+<span class="nc bnc" id="L371" title="All 2 branches missed.">        if (getRecursiveWatchQty() == 0) {</span>
+<span class="nc" id="L372">            return PathParentIterator.forPathOnly(path);</span>
+        }
+<span class="nc" id="L374">        return PathParentIterator.forAll(path);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

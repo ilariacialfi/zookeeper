@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>IPAuthenticationProvider.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server.auth</a> &gt; <span class="el_source">IPAuthenticationProvider.java</span></div><h1>IPAuthenticationProvider.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server.auth;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.regex.Pattern;
+import javax.servlet.http.HttpServletRequest;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.data.Id;
+import org.apache.zookeeper.server.ServerCnxn;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+<span class="nc" id="L32">public class IPAuthenticationProvider implements AuthenticationProvider {</span>
+<span class="nc" id="L33">    private static final Logger LOG = LoggerFactory.getLogger(IPAuthenticationProvider.class);</span>
+    public static final String X_FORWARDED_FOR_HEADER_NAME = &quot;X-Forwarded-For&quot;;
+
+    public static final String USE_X_FORWARDED_FOR_KEY = &quot;zookeeper.IPAuthenticationProvider.usexforwardedfor&quot;;
+    private static final int IPV6_BYTE_LENGTH = 16; // IPv6 address is 128 bits = 16 bytes
+    private static final int IPV6_SEGMENT_COUNT = 8; // IPv6 address has 8 segments
+    private static final int IPV6_SEGMENT_BYTE_LENGTH = 2; // Each segment has up to two bytes
+    private static final int IPV6_SEGMENT_HEX_LENGTH = 4; // Each segment has up to 4 hex digits
+
+<span class="nc" id="L42">    private static final Pattern IPV6_PATTERN = Pattern.compile(&quot;:&quot;);</span>
+<span class="nc" id="L43">    private static final Pattern IPV4_PATTERN = Pattern.compile(&quot;\\.&quot;);</span>
+
+    public String getScheme() {
+<span class="nc" id="L46">        return &quot;ip&quot;;</span>
+    }
+
+    public KeeperException.Code handleAuthentication(ServerCnxn cnxn, byte[] authData) {
+<span class="nc" id="L50">        String id = cnxn.getRemoteSocketAddress().getAddress().getHostAddress();</span>
+<span class="nc" id="L51">        cnxn.addAuthInfo(new Id(getScheme(), id));</span>
+<span class="nc" id="L52">        return KeeperException.Code.OK;</span>
+    }
+
+    @Override
+    public List&lt;Id&gt; handleAuthentication(HttpServletRequest request, byte[] authData) {
+<span class="nc" id="L57">        final List&lt;Id&gt; ids = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L59">        final String ip = getClientIPAddress(request);</span>
+<span class="nc" id="L60">        ids.add(new Id(getScheme(), ip));</span>
+
+<span class="nc" id="L62">        return Collections.unmodifiableList(ids);</span>
+    }
+
+    // This is a bit weird but we need to return the address and the number of
+    // bytes (to distinguish between IPv4 and IPv6
+    private byte[] addr2Bytes(String addr) {
+<span class="nc bnc" id="L68" title="All 2 branches missed.">        if (IPV6_PATTERN.matcher(addr).find()) {</span>
+<span class="nc" id="L69">            return v6addr2Bytes(addr);</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">        } else if (IPV4_PATTERN.matcher(addr).find()) {</span>
+<span class="nc" id="L71">            return v4addr2Bytes(addr);</span>
+        } else {
+<span class="nc" id="L73">            LOG.warn(&quot;Input string does not resemble an IPv4 or IPv6 address: {}&quot;, addr);</span>
+<span class="nc" id="L74">            return null;</span>
+        }
+    }
+
+    private byte[] v4addr2Bytes(String addr) {
+<span class="nc" id="L79">        String[] parts = addr.split(&quot;\\.&quot;, -1);</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">        if (parts.length != 4) {</span>
+<span class="nc" id="L81">            return null;</span>
+        }
+<span class="nc" id="L83">        byte[] b = new byte[4];</span>
+<span class="nc bnc" id="L84" title="All 2 branches missed.">        for (int i = 0; i &lt; 4; i++) {</span>
+            try {
+<span class="nc" id="L86">                int v = Integer.parseInt(parts[i]);</span>
+<span class="nc bnc" id="L87" title="All 4 branches missed.">                if (v &gt;= 0 &amp;&amp; v &lt;= 255) {</span>
+<span class="nc" id="L88">                    b[i] = (byte) v;</span>
+                } else {
+<span class="nc" id="L90">                    return null;</span>
+                }
+<span class="nc" id="L92">            } catch (NumberFormatException e) {</span>
+<span class="nc" id="L93">                return null;</span>
+<span class="nc" id="L94">            }</span>
+        }
+<span class="nc" id="L96">        return b;</span>
+    }
+
+    /**
+     * Validates an IPv6 address string and converts it into a byte array.
+     *
+     * @param ipv6Addr The IPv6 address string to validate.
+     * @return A byte array representing the IPv6 address if valid, or null if the address
+     * is invalid or cannot be parsed.
+     */
+    static byte[] v6addr2Bytes(String ipv6Addr) {
+        try {
+<span class="nc" id="L108">            return parseV6addr(ipv6Addr);</span>
+<span class="nc" id="L109">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L110">            LOG.warn(&quot;Fail to parse {} as IPv6 address: {}&quot;, ipv6Addr, e.getMessage());</span>
+<span class="nc" id="L111">            return null;</span>
+        }
+    }
+
+    static byte[] parseV6addr(String ipv6Addr) {
+        // Split the address by &quot;::&quot; to handle zero compression, -1 to keep trailing empty strings
+<span class="nc" id="L117">        String[] parts = ipv6Addr.split(&quot;::&quot;, -1);</span>
+
+<span class="nc" id="L119">        String[] segments1 = new String[0];</span>
+<span class="nc" id="L120">        String[] segments2 = new String[0];</span>
+
+        // Case 1: No &quot;::&quot; (full address)
+<span class="nc bnc" id="L123" title="All 2 branches missed.">        if (parts.length == 1) {</span>
+<span class="nc" id="L124">            segments1 = parts[0].split(&quot;:&quot;, -1);</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">            if (segments1.length != IPV6_SEGMENT_COUNT) {</span>
+<span class="nc" id="L126">                String reason = &quot;wrong number of segments&quot;;</span>
+<span class="nc" id="L127">                throw new IllegalArgumentException(reason);</span>
+            }
+<span class="nc bnc" id="L129" title="All 2 branches missed.">        } else if (parts.length == 2) {</span>
+            // Case 2: &quot;::&quot; is present
+            // Handle cases like &quot;::1&quot; or &quot;1::&quot;
+<span class="nc bnc" id="L132" title="All 2 branches missed.">            if (!parts[0].isEmpty()) {</span>
+<span class="nc" id="L133">                segments1 = parts[0].split(&quot;:&quot;, -1);</span>
+            }
+<span class="nc bnc" id="L135" title="All 2 branches missed.">            if (!parts[1].isEmpty()) {</span>
+<span class="nc" id="L136">                segments2 = parts[1].split(&quot;:&quot;, -1);</span>
+            }
+
+            // Check if the total number of explicit segments exceeds 8
+<span class="nc bnc" id="L140" title="All 2 branches missed.">            if (segments1.length + segments2.length &gt;= IPV6_SEGMENT_COUNT) {</span>
+<span class="nc" id="L141">                String reason = &quot;too many segments&quot;;</span>
+<span class="nc" id="L142">                throw new IllegalArgumentException(reason);</span>
+            }
+        } else {
+            // Case 3: Invalid number of parts after splitting by &quot;::&quot; (should be 1 or 2)
+<span class="nc" id="L146">            String reason = &quot;too many '::'&quot;;</span>
+<span class="nc" id="L147">            throw new IllegalArgumentException(reason);</span>
+        }
+
+<span class="nc" id="L150">        byte[] result = new byte[IPV6_BYTE_LENGTH];</span>
+        // Process segments before &quot;::&quot;
+<span class="nc" id="L152">        parseV6Segment(result, 0, segments1);</span>
+        // Process segments after &quot;::&quot;
+<span class="nc" id="L154">        parseV6Segment(result, IPV6_BYTE_LENGTH - segments2.length * IPV6_SEGMENT_BYTE_LENGTH, segments2);</span>
+
+<span class="nc" id="L156">        return result;</span>
+    }
+
+    private static void parseV6Segment(byte[] addr, int i, String[] segments) {
+<span class="nc bnc" id="L160" title="All 2 branches missed.">        for (String segment : segments) {</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">            if (segment.isEmpty()) {</span>
+<span class="nc" id="L162">                throw new IllegalArgumentException(&quot;empty segment&quot;);</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">            } else if (segment.length() &gt; IPV6_SEGMENT_HEX_LENGTH) {</span>
+<span class="nc" id="L164">                throw new IllegalArgumentException(&quot;segment too long&quot;);</span>
+            }
+            try {
+<span class="nc" id="L167">                int value = Integer.parseInt(segment, 16);</span>
+<span class="nc" id="L168">                addr[i++] = (byte) ((value &gt;&gt; 8) &amp; 0xFF);</span>
+<span class="nc" id="L169">                addr[i++] = (byte) (value &amp; 0xFF);</span>
+<span class="nc" id="L170">            } catch (NumberFormatException e) {</span>
+<span class="nc" id="L171">                throw new IllegalArgumentException(&quot;invalid hexadecimal characters in segment: &quot; + segment);</span>
+<span class="nc" id="L172">            }</span>
+        }
+<span class="nc" id="L174">    }</span>
+
+    private void mask(byte[] b, int bits) {
+<span class="nc" id="L177">        int start = bits / 8;</span>
+<span class="nc" id="L178">        int startMask = (1 &lt;&lt; (8 - (bits % 8))) - 1;</span>
+<span class="nc" id="L179">        startMask = ~startMask;</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">        while (start &lt; b.length) {</span>
+<span class="nc" id="L181">            b[start] &amp;= startMask;</span>
+<span class="nc" id="L182">            startMask = 0;</span>
+<span class="nc" id="L183">            start++;</span>
+        }
+<span class="nc" id="L185">    }</span>
+
+    public boolean matches(String id, String aclExpr) {
+<span class="nc" id="L188">        LOG.trace(&quot;id: '{}' aclExpr:  {}&quot;, id, aclExpr);</span>
+<span class="nc" id="L189">        String[] parts = aclExpr.split(&quot;/&quot;, 2);</span>
+<span class="nc" id="L190">        byte[] aclAddr = addr2Bytes(parts[0]);</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">        if (aclAddr == null) {</span>
+<span class="nc" id="L192">            return false;</span>
+        }
+<span class="nc" id="L194">        int bits = aclAddr.length * 8;</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">        if (parts.length == 2) {</span>
+            try {
+<span class="nc" id="L197">                bits = Integer.parseInt(parts[1]);</span>
+<span class="nc bnc" id="L198" title="All 4 branches missed.">                if (bits &lt; 0 || bits &gt; aclAddr.length * 8) {</span>
+<span class="nc" id="L199">                    return false;</span>
+                }
+<span class="nc" id="L201">            } catch (NumberFormatException e) {</span>
+<span class="nc" id="L202">                return false;</span>
+<span class="nc" id="L203">            }</span>
+        }
+<span class="nc" id="L205">        mask(aclAddr, bits);</span>
+<span class="nc" id="L206">        byte[] remoteAddr = addr2Bytes(id);</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">        if (remoteAddr == null) {</span>
+<span class="nc" id="L208">            return false;</span>
+        }
+<span class="nc" id="L210">        mask(remoteAddr, bits);</span>
+        // Check if id and acl expression are of different formats (ipv6 or iv4) return false
+<span class="nc bnc" id="L212" title="All 2 branches missed.">        if (remoteAddr.length != aclAddr.length) {</span>
+<span class="nc" id="L213">            return false;</span>
+        }
+<span class="nc bnc" id="L215" title="All 2 branches missed.">        for (int i = 0; i &lt; remoteAddr.length; i++) {</span>
+<span class="nc bnc" id="L216" title="All 2 branches missed.">            if (remoteAddr[i] != aclAddr[i]) {</span>
+<span class="nc" id="L217">                return false;</span>
+            }
+        }
+<span class="nc" id="L220">        return true;</span>
+    }
+
+    public boolean isAuthenticated() {
+<span class="nc" id="L224">        return false;</span>
+    }
+
+    public boolean isValid(String id) {
+<span class="nc" id="L228">        String[] parts = id.split(&quot;/&quot;, 2);</span>
+<span class="nc" id="L229">        byte[] aclAddr = addr2Bytes(parts[0]);</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">        if (aclAddr == null) {</span>
+<span class="nc" id="L231">            return false;</span>
+        }
+<span class="nc bnc" id="L233" title="All 2 branches missed.">        if (parts.length == 2) {</span>
+            try {
+<span class="nc" id="L235">                int bits = Integer.parseInt(parts[1]);</span>
+<span class="nc bnc" id="L236" title="All 4 branches missed.">                if (bits &lt; 0 || bits &gt; aclAddr.length * 8) {</span>
+<span class="nc" id="L237">                    return false;</span>
+                }
+<span class="nc" id="L239">            } catch (NumberFormatException e) {</span>
+<span class="nc" id="L240">                return false;</span>
+<span class="nc" id="L241">            }</span>
+        }
+<span class="nc" id="L243">        return true;</span>
+    }
+
+    /**
+     * Returns the HTTP(s) client IP address
+     * @param request HttpServletRequest
+     * @return IP address
+     */
+    public static String getClientIPAddress(final HttpServletRequest request) {
+<span class="nc bnc" id="L252" title="All 2 branches missed.">        if (!Boolean.getBoolean(USE_X_FORWARDED_FOR_KEY)) {</span>
+<span class="nc" id="L253">            return request.getRemoteAddr();</span>
+        }
+
+        // to handle the case that a HTTP(s) client connects via a proxy or load balancer
+<span class="nc" id="L257">        final String xForwardedForHeader = request.getHeader(X_FORWARDED_FOR_HEADER_NAME);</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">        if (xForwardedForHeader == null) {</span>
+<span class="nc" id="L259">            return request.getRemoteAddr();</span>
+        }
+        // return the rightmost IP address in the X-Forwarded-For chain
+<span class="nc" id="L262">        String[] tokens = xForwardedForHeader.split(&quot;,&quot;);</span>
+<span class="nc" id="L263">        return tokens[tokens.length - 1];</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>HostProviderFactory.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.client</a> &gt; <span class="el_source">HostProviderFactory.java</span></div><h1>HostProviderFactory.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.client;
+
+import org.apache.yetus.audience.InterfaceAudience;
+
+/**
+ * Factory for creating appropriate HostProvider instances based on connect string format.
+ * This factory enables zero-code-change migration by automatically detecting the connect
+ * string format and creating the appropriate HostProvider implementation.
+ *
+ * Supported formats:
+ * - Host:Port: &quot;host1:port1,host2:port2,host3:port3&quot; (StaticHostProvider)
+ * - DNS SRV: &quot;dns-srv://service.domain.com&quot;  (DnsSrvHostProvider)
+ *
+ * - Future formats can be easily added by extending the factory
+ */
+@InterfaceAudience.Public
+<span class="nc" id="L35">public class HostProviderFactory {</span>
+    /**
+     * Creates a HostProvider based on the connect string format.
+     * This is a convenience method for zero-code-change migration.
+     *
+     * @param connectString the connect string
+     * @return appropriate HostProvider
+     */
+    public static HostProvider create(final String connectString) {
+<span class="nc" id="L44">        final ConnectStringParser connectStringParser = new ConnectStringParser(connectString);</span>
+<span class="nc" id="L45">        return create(connectStringParser, null);</span>
+    }
+
+    /**
+     * Creates a HostProvider based on the connect string format.
+     *
+     * @param connectStringParser the connect string parser
+     * @param clientConfig ZooKeeper client configuration
+     *
+     * @return appropriate HostProvider
+     */
+    @InterfaceAudience.Private
+    public static HostProvider create(final ConnectStringParser connectStringParser, final ZKClientConfig clientConfig) {
+<span class="nc bnc" id="L58" title="All 2 branches missed.">        switch (connectStringParser.getConnectionType()) {</span>
+            case DNS_SRV:
+<span class="nc" id="L60">                final String dnsSrvName = connectStringParser.getServerAddresses().get(0).getHostString();</span>
+<span class="nc" id="L61">                return new DnsSrvHostProvider(dnsSrvName, clientConfig);</span>
+            default:
+<span class="nc" id="L63">                return new StaticHostProvider(connectStringParser.getServerAddresses(), clientConfig);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

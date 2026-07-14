@@ -1,0 +1,562 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Request.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server</a> &gt; <span class="el_source">Request.java</span></div><h1>Request.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.List;
+import java.util.function.Supplier;
+import org.apache.jute.Record;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.ZooDefs.OpCode;
+import org.apache.zookeeper.common.Time;
+import org.apache.zookeeper.data.Id;
+import org.apache.zookeeper.metrics.Summary;
+import org.apache.zookeeper.metrics.SummarySet;
+import org.apache.zookeeper.server.persistence.Util;
+import org.apache.zookeeper.server.quorum.LearnerHandler;
+import org.apache.zookeeper.server.quorum.flexible.QuorumVerifier;
+import org.apache.zookeeper.server.util.AuthUtil;
+import org.apache.zookeeper.txn.TxnDigest;
+import org.apache.zookeeper.txn.TxnHeader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * This is the structure that represents a request moving through a chain of
+ * RequestProcessors. There are various pieces of information that is tacked
+ * onto the request as it is processed.
+ */
+public class Request {
+<span class="nc" id="L48">    private static final Logger LOG = LoggerFactory.getLogger(Request.class);</span>
+
+<span class="nc" id="L50">    public static final Request requestOfDeath = new Request(null, 0, 0, 0, null, null);</span>
+
+    // Considers a request stale if the request's connection has closed. Enabled
+    // by default.
+<span class="nc" id="L54">    private static volatile boolean staleConnectionCheck = Boolean.parseBoolean(System.getProperty(&quot;zookeeper.request_stale_connection_check&quot;, &quot;true&quot;));</span>
+
+    // Considers a request stale if the request latency is higher than its
+    // associated session timeout. Disabled by default.
+<span class="nc" id="L58">    private static volatile boolean staleLatencyCheck = Boolean.parseBoolean(System.getProperty(&quot;zookeeper.request_stale_latency_check&quot;, &quot;false&quot;));</span>
+
+<span class="nc" id="L60">    public Request(ServerCnxn cnxn, long sessionId, int xid, int type, RequestRecord request, List&lt;Id&gt; authInfo) {</span>
+<span class="nc" id="L61">        this.cnxn = cnxn;</span>
+<span class="nc" id="L62">        this.sessionId = sessionId;</span>
+<span class="nc" id="L63">        this.cxid = xid;</span>
+<span class="nc" id="L64">        this.type = type;</span>
+<span class="nc" id="L65">        this.request = request;</span>
+<span class="nc" id="L66">        this.authInfo = authInfo;</span>
+<span class="nc" id="L67">    }</span>
+
+<span class="nc" id="L69">    public Request(long sessionId, int xid, int type, TxnHeader hdr, Record txn, long zxid) {</span>
+<span class="nc" id="L70">        this.sessionId = sessionId;</span>
+<span class="nc" id="L71">        this.cxid = xid;</span>
+<span class="nc" id="L72">        this.type = type;</span>
+<span class="nc" id="L73">        this.hdr = hdr;</span>
+<span class="nc" id="L74">        this.txn = txn;</span>
+<span class="nc" id="L75">        this.zxid = zxid;</span>
+<span class="nc" id="L76">        this.request = null;</span>
+<span class="nc" id="L77">        this.cnxn = null;</span>
+<span class="nc" id="L78">        this.authInfo = null;</span>
+<span class="nc" id="L79">    }</span>
+
+<span class="nc" id="L81">    public Request(TxnHeader hdr, Record txn, TxnDigest digest) {</span>
+<span class="nc" id="L82">        this.sessionId = hdr.getClientId();</span>
+<span class="nc" id="L83">        this.cxid = hdr.getCxid();</span>
+<span class="nc" id="L84">        this.type = hdr.getType();</span>
+<span class="nc" id="L85">        this.hdr = hdr;</span>
+<span class="nc" id="L86">        this.txn = txn;</span>
+<span class="nc" id="L87">        this.zxid = hdr.getZxid();</span>
+<span class="nc" id="L88">        this.request = null;</span>
+<span class="nc" id="L89">        this.cnxn = null;</span>
+<span class="nc" id="L90">        this.authInfo = null;</span>
+<span class="nc" id="L91">        this.txnDigest = digest;</span>
+<span class="nc" id="L92">    }</span>
+
+    public final long sessionId;
+
+    public final int cxid;
+
+    public final int type;
+
+    private final RequestRecord request;
+
+    public &lt;T extends Record&gt; T readRequestRecord(Supplier&lt;T&gt; constructor) throws IOException {
+<span class="nc bnc" id="L103" title="All 2 branches missed.">        if (request != null) {</span>
+<span class="nc" id="L104">            return request.readRecord(constructor);</span>
+        }
+<span class="nc" id="L106">        throw new IOException(new NullPointerException(&quot;request&quot;));</span>
+    }
+
+    public &lt;T extends Record&gt; T readRequestRecordNoException(Supplier&lt;T&gt; constructor) {
+        try {
+<span class="nc" id="L111">            return readRequestRecord(constructor);</span>
+<span class="nc" id="L112">        } catch (IOException e) {</span>
+<span class="nc" id="L113">            return null;</span>
+        }
+    }
+
+    public byte[] readRequestBytes() {
+<span class="nc bnc" id="L118" title="All 2 branches missed.">        if (request != null) {</span>
+<span class="nc" id="L119">            return request.readBytes();</span>
+        }
+<span class="nc" id="L121">        return null;</span>
+    }
+
+    public String requestDigest() {
+<span class="nc bnc" id="L125" title="All 2 branches missed.">        if (request != null) {</span>
+<span class="nc" id="L126">            final StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L127">            final byte[] payload = request.readBytes();</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">            for (byte b : payload) {</span>
+<span class="nc" id="L129">                sb.append(String.format(&quot;%02x&quot;, (0xff &amp; b)));</span>
+            }
+<span class="nc" id="L131">            return sb.toString();</span>
+        }
+<span class="nc" id="L133">        return &quot;request buffer is null&quot;;</span>
+    }
+
+    public final ServerCnxn cnxn;
+
+    private TxnHeader hdr;
+
+    private Record txn;
+
+<span class="nc" id="L142">    public long zxid = -1;</span>
+
+    public final List&lt;Id&gt; authInfo;
+
+<span class="nc" id="L146">    public final long createTime = Time.currentElapsedTime();</span>
+
+<span class="nc" id="L148">    public long prepQueueStartTime = -1;</span>
+
+<span class="nc" id="L150">    public long prepStartTime = -1;</span>
+
+<span class="nc" id="L152">    public long commitProcQueueStartTime = -1;</span>
+
+<span class="nc" id="L154">    public long commitRecvTime = -1;</span>
+
+    public long syncQueueStartTime;
+
+    public long requestThrottleQueueTime;
+
+    private Object owner;
+
+    private KeeperException e;
+
+<span class="nc" id="L164">    public QuorumVerifier qv = null;</span>
+
+    private TxnDigest txnDigest;
+
+<span class="nc" id="L168">    private boolean isThrottledFlag = false;</span>
+
+    public boolean isThrottled() {
+<span class="nc" id="L171">      return isThrottledFlag;</span>
+    }
+
+    public void setIsThrottled(boolean val) {
+<span class="nc" id="L175">      isThrottledFlag = val;</span>
+<span class="nc" id="L176">    }</span>
+
+    public boolean isThrottlable() {
+<span class="nc bnc" id="L179" title="All 6 branches missed.">        return this.type != OpCode.ping</span>
+                &amp;&amp; this.type != OpCode.closeSession
+                &amp;&amp; this.type != OpCode.createSession;
+    }
+
+    public byte[] getSerializeData() {
+<span class="nc bnc" id="L185" title="All 2 branches missed.">        if (this.hdr == null) {</span>
+<span class="nc" id="L186">            return null;</span>
+        }
+        try {
+<span class="nc" id="L189">            return Util.marshallTxnEntry(this.hdr, this.txn, this.txnDigest);</span>
+<span class="nc" id="L190">        } catch (IOException e) {</span>
+<span class="nc" id="L191">            LOG.error(&quot;This really should be impossible.&quot;, e);</span>
+<span class="nc" id="L192">            return new byte[32];</span>
+        }
+    }
+
+    /**
+     * If this is a create or close request for a local-only session.
+     */
+<span class="nc" id="L199">    private boolean isLocalSession = false;</span>
+
+<span class="nc" id="L201">    private int largeRequestSize = -1;</span>
+
+    public boolean isLocalSession() {
+<span class="nc" id="L204">        return isLocalSession;</span>
+    }
+
+    public void setLocalSession(boolean isLocalSession) {
+<span class="nc" id="L208">        this.isLocalSession = isLocalSession;</span>
+<span class="nc" id="L209">    }</span>
+
+    public void setLargeRequestSize(int size) {
+<span class="nc" id="L212">        largeRequestSize = size;</span>
+<span class="nc" id="L213">    }</span>
+
+    public int getLargeRequestSize() {
+<span class="nc" id="L216">        return largeRequestSize;</span>
+    }
+
+    public Object getOwner() {
+<span class="nc" id="L220">        return owner;</span>
+    }
+
+    public void setOwner(Object owner) {
+<span class="nc" id="L224">        this.owner = owner;</span>
+<span class="nc" id="L225">    }</span>
+
+    public TxnHeader getHdr() {
+<span class="nc" id="L228">        return hdr;</span>
+    }
+
+    public void setHdr(TxnHeader hdr) {
+<span class="nc" id="L232">        this.hdr = hdr;</span>
+<span class="nc" id="L233">    }</span>
+
+    public Record getTxn() {
+<span class="nc" id="L236">        return txn;</span>
+    }
+
+    public void setTxn(Record txn) {
+<span class="nc" id="L240">        this.txn = txn;</span>
+<span class="nc" id="L241">    }</span>
+
+    public ServerCnxn getConnection() {
+<span class="nc" id="L244">        return cnxn;</span>
+    }
+
+    public static boolean getStaleLatencyCheck() {
+<span class="nc" id="L248">        return staleLatencyCheck;</span>
+    }
+
+    public static void setStaleLatencyCheck(boolean check) {
+<span class="nc" id="L252">        staleLatencyCheck = check;</span>
+<span class="nc" id="L253">    }</span>
+
+    public static boolean getStaleConnectionCheck() {
+<span class="nc" id="L256">        return staleConnectionCheck;</span>
+    }
+
+    public static void setStaleConnectionCheck(boolean check) {
+<span class="nc" id="L260">        staleConnectionCheck = check;</span>
+<span class="nc" id="L261">    }</span>
+
+    public boolean isStale() {
+<span class="nc bnc" id="L264" title="All 2 branches missed.">        if (cnxn == null) {</span>
+<span class="nc" id="L265">            return false;</span>
+        }
+
+        // closeSession requests should be able to outlive the session in order
+        // to clean-up state.
+<span class="nc bnc" id="L270" title="All 2 branches missed.">        if (type == OpCode.closeSession) {</span>
+<span class="nc" id="L271">            return false;</span>
+        }
+
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        if (staleConnectionCheck) {</span>
+            // If the connection is closed, consider the request stale.
+<span class="nc bnc" id="L276" title="All 4 branches missed.">            if (cnxn.isStale() || cnxn.isInvalid()) {</span>
+<span class="nc" id="L277">                return true;</span>
+            }
+        }
+
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        if (staleLatencyCheck) {</span>
+            // If the request latency is higher than session timeout, consider
+            // the request stale.
+<span class="nc" id="L284">            long currentTime = Time.currentElapsedTime();</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">            return (currentTime - createTime) &gt; cnxn.getSessionTimeout();</span>
+        }
+
+<span class="nc" id="L288">        return false;</span>
+    }
+
+    /**
+     * A prior request was dropped on this request's connection and
+     * therefore this request must also be dropped to ensure correct
+     * ordering semantics.
+     */
+    public boolean mustDrop() {
+<span class="nc bnc" id="L297" title="All 4 branches missed.">        return ((cnxn != null) &amp;&amp; cnxn.isInvalid());</span>
+    }
+
+    /**
+     * is the packet type a valid packet in zookeeper
+     *
+     * @param type
+     *                the type of the packet
+     * @return true if a valid packet, false if not
+     */
+    static boolean isValid(int type) {
+        // make sure this is always synchronized with Zoodefs!!
+<span class="nc bnc" id="L309" title="All 3 branches missed.">        switch (type) {</span>
+        case OpCode.notification:
+        case OpCode.check:
+<span class="nc" id="L312">            return false;</span>
+        case OpCode.closeSession:
+        case OpCode.create:
+        case OpCode.create2:
+        case OpCode.createTTL:
+        case OpCode.createContainer:
+        case OpCode.createSession:
+        case OpCode.delete:
+        case OpCode.deleteContainer:
+        case OpCode.exists:
+        case OpCode.getACL:
+        case OpCode.getChildren:
+        case OpCode.getAllChildrenNumber:
+        case OpCode.getChildren2:
+        case OpCode.getData:
+        case OpCode.getEphemerals:
+        case OpCode.multi:
+        case OpCode.multiRead:
+        case OpCode.ping:
+        case OpCode.reconfig:
+        case OpCode.setACL:
+        case OpCode.setData:
+        case OpCode.setWatches:
+        case OpCode.setWatches2:
+        case OpCode.sync:
+        case OpCode.checkWatches:
+        case OpCode.removeWatches:
+        case OpCode.addWatch:
+        case OpCode.whoAmI:
+<span class="nc" id="L341">            return true;</span>
+        default:
+<span class="nc" id="L343">            return false;</span>
+        }
+    }
+
+    public boolean isQuorum() {
+<span class="nc bnc" id="L348" title="All 4 branches missed.">        switch (this.type) {</span>
+        case OpCode.exists:
+        case OpCode.getACL:
+        case OpCode.getChildren:
+        case OpCode.getAllChildrenNumber:
+        case OpCode.getChildren2:
+        case OpCode.getData:
+        case OpCode.getEphemerals:
+        case OpCode.multiRead:
+        case OpCode.whoAmI:
+<span class="nc" id="L358">            return false;</span>
+        case OpCode.create:
+        case OpCode.create2:
+        case OpCode.createTTL:
+        case OpCode.createContainer:
+        case OpCode.error:
+        case OpCode.delete:
+        case OpCode.deleteContainer:
+        case OpCode.setACL:
+        case OpCode.setData:
+        case OpCode.check:
+        case OpCode.multi:
+        case OpCode.reconfig:
+<span class="nc" id="L371">            return true;</span>
+        case OpCode.closeSession:
+        case OpCode.createSession:
+<span class="nc bnc" id="L374" title="All 2 branches missed.">            return !this.isLocalSession;</span>
+        default:
+<span class="nc" id="L376">            return false;</span>
+        }
+    }
+
+    public static String op2String(int op) {
+<span class="nc bnc" id="L381" title="All 34 branches missed.">        switch (op) {</span>
+            case OpCode.notification:
+<span class="nc" id="L383">                return &quot;notification&quot;;</span>
+            case OpCode.create:
+<span class="nc" id="L385">                return &quot;create&quot;;</span>
+            case OpCode.delete:
+<span class="nc" id="L387">                return &quot;delete&quot;;</span>
+            case OpCode.exists:
+<span class="nc" id="L389">                return &quot;exists&quot;;</span>
+            case OpCode.getData:
+<span class="nc" id="L391">                return &quot;getData&quot;;</span>
+            case OpCode.setData:
+<span class="nc" id="L393">                return &quot;setData&quot;;</span>
+            case OpCode.getACL:
+<span class="nc" id="L395">                return &quot;getACL&quot;;</span>
+            case OpCode.setACL:
+<span class="nc" id="L397">                return &quot;setACL&quot;;</span>
+            case OpCode.getChildren:
+<span class="nc" id="L399">                return &quot;getChildren&quot;;</span>
+            case OpCode.sync:
+<span class="nc" id="L401">                return &quot;sync&quot;;</span>
+            case OpCode.ping:
+<span class="nc" id="L403">                return &quot;ping&quot;;</span>
+            case OpCode.getChildren2:
+<span class="nc" id="L405">                return &quot;getChildren2&quot;;</span>
+            case OpCode.check:
+<span class="nc" id="L407">                return &quot;check&quot;;</span>
+            case OpCode.multi:
+<span class="nc" id="L409">                return &quot;multi&quot;;</span>
+            case OpCode.create2:
+<span class="nc" id="L411">                return &quot;create2&quot;;</span>
+            case OpCode.reconfig:
+<span class="nc" id="L413">                return &quot;reconfig&quot;;</span>
+            case OpCode.checkWatches:
+<span class="nc" id="L415">                return &quot;checkWatches&quot;;</span>
+            case OpCode.removeWatches:
+<span class="nc" id="L417">                return &quot;removeWatches&quot;;</span>
+            case OpCode.createContainer:
+<span class="nc" id="L419">                return &quot;createContainer&quot;;</span>
+            case OpCode.deleteContainer:
+<span class="nc" id="L421">                return &quot;deleteContainer&quot;;</span>
+            case OpCode.createTTL:
+<span class="nc" id="L423">                return &quot;createTTL&quot;;</span>
+            case OpCode.multiRead:
+<span class="nc" id="L425">                return &quot;multiRead&quot;;</span>
+            case OpCode.auth:
+<span class="nc" id="L427">                return &quot;auth&quot;;</span>
+            case OpCode.setWatches:
+<span class="nc" id="L429">                return &quot;setWatches&quot;;</span>
+            case OpCode.setWatches2:
+<span class="nc" id="L431">                return &quot;setWatches2&quot;;</span>
+            case OpCode.addWatch:
+<span class="nc" id="L433">                return &quot;addWatch&quot;;</span>
+            case OpCode.sasl:
+<span class="nc" id="L435">                return &quot;sasl&quot;;</span>
+            case OpCode.getEphemerals:
+<span class="nc" id="L437">                return &quot;getEphemerals&quot;;</span>
+            case OpCode.getAllChildrenNumber:
+<span class="nc" id="L439">                return &quot;getAllChildrenNumber&quot;;</span>
+            case OpCode.createSession:
+<span class="nc" id="L441">                return &quot;createSession&quot;;</span>
+            case OpCode.closeSession:
+<span class="nc" id="L443">                return &quot;closeSession&quot;;</span>
+            case OpCode.error:
+<span class="nc" id="L445">                return &quot;error&quot;;</span>
+            case OpCode.whoAmI:
+<span class="nc" id="L447">                return &quot;whoAmI&quot;;</span>
+            default:
+<span class="nc" id="L449">                return &quot;unknown &quot; + op;</span>
+        }
+    }
+
+    @Override
+    public String toString() {
+<span class="nc" id="L455">        StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L456">        sb.append(&quot;sessionid:0x&quot;).append(Long.toHexString(sessionId))</span>
+<span class="nc" id="L457">          .append(&quot; type:&quot;).append(op2String(type))</span>
+<span class="nc" id="L458">          .append(&quot; cxid:0x&quot;).append(Long.toHexString(cxid))</span>
+<span class="nc bnc" id="L459" title="All 2 branches missed.">          .append(&quot; zxid:0x&quot;).append(Long.toHexString(hdr == null ? -2 : hdr.getZxid()))</span>
+<span class="nc bnc" id="L460" title="All 2 branches missed.">          .append(&quot; txntype:&quot;).append(hdr == null ? &quot;unknown&quot; : &quot;&quot; + hdr.getType());</span>
+
+        // best effort to print the path assoc with this request
+<span class="nc" id="L463">        String path = &quot;n/a&quot;;</span>
+<span class="nc bnc" id="L464" title="All 10 branches missed.">        if (type != OpCode.createSession</span>
+            &amp;&amp; type != OpCode.setWatches
+            &amp;&amp; type != OpCode.setWatches2
+            &amp;&amp; type != OpCode.closeSession
+            &amp;&amp; request != null) {
+            try {
+                // make sure we don't mess with request itself
+<span class="nc" id="L471">                byte[] bytes = request.readBytes();</span>
+<span class="nc bnc" id="L472" title="All 4 branches missed.">                if (bytes != null &amp;&amp; bytes.length &gt;= 4) {</span>
+<span class="nc" id="L473">                    ByteBuffer buf = ByteBuffer.wrap(bytes);</span>
+<span class="nc" id="L474">                    int pathLen = buf.getInt();</span>
+                    // sanity check
+<span class="nc bnc" id="L476" title="All 6 branches missed.">                    if (pathLen &gt;= 0 &amp;&amp; pathLen &lt; 4096 &amp;&amp; buf.remaining() &gt;= pathLen) {</span>
+<span class="nc" id="L477">                        byte[] b = new byte[pathLen];</span>
+<span class="nc" id="L478">                        buf.get(b);</span>
+<span class="nc" id="L479">                        path = new String(b, UTF_8);</span>
+                    }
+                }
+<span class="nc" id="L482">            } catch (Exception e) {</span>
+                // ignore - can't find the path, will output &quot;n/a&quot; instead
+<span class="nc" id="L484">            }</span>
+        }
+<span class="nc" id="L486">        sb.append(&quot; reqpath:&quot;).append(path);</span>
+
+<span class="nc" id="L488">        return sb.toString();</span>
+    }
+
+    public void setException(KeeperException e) {
+<span class="nc" id="L492">        this.e = e;</span>
+<span class="nc" id="L493">    }</span>
+
+    public KeeperException getException() {
+<span class="nc" id="L496">        return e;</span>
+    }
+
+    public void logLatency(Summary metric) {
+<span class="nc" id="L500">        logLatency(metric, Time.currentWallTime());</span>
+<span class="nc" id="L501">    }</span>
+
+    public void logLatency(Summary metric, long currentTime) {
+<span class="nc bnc" id="L504" title="All 2 branches missed.">        if (hdr != null) {</span>
+            /* Request header is created by leader. If there is clock drift
+             * latency might be negative. Headers use wall time, not
+             * CLOCK_MONOTONIC.
+             */
+<span class="nc" id="L509">            long latency = currentTime - hdr.getTime();</span>
+<span class="nc bnc" id="L510" title="All 2 branches missed.">            if (latency &gt;= 0) {</span>
+<span class="nc" id="L511">                metric.add(latency);</span>
+            }
+        }
+<span class="nc" id="L514">    }</span>
+
+    public void logLatency(SummarySet metric, String key, long currentTime) {
+<span class="nc bnc" id="L517" title="All 2 branches missed.">        if (hdr != null) {</span>
+            /* Request header is created by leader. If there is clock drift
+             * latency might be negative. Headers use wall time, not
+             * CLOCK_MONOTONIC.
+             */
+<span class="nc" id="L522">            long latency = currentTime - hdr.getTime();</span>
+<span class="nc bnc" id="L523" title="All 2 branches missed.">            if (latency &gt;= 0) {</span>
+<span class="nc" id="L524">                metric.add(key, latency);</span>
+            }
+        }
+<span class="nc" id="L527">    }</span>
+
+    public void logLatency(SummarySet metric, String key) {
+<span class="nc" id="L530">        logLatency(metric, key, Time.currentWallTime());</span>
+<span class="nc" id="L531">    }</span>
+
+    /**
+     * Returns a formatted, comma-separated list of the user IDs
+     * associated with this {@code Request}, or {@code null} if no
+     * user IDs were found.
+     *
+     * The return value is used for audit logging.  While it may be
+     * easy on the eyes, it is underspecified: it does not mention the
+     * corresponding {@code scheme}, nor are its components escaped.
+     * This is not a security feature.
+     *
+     * @return a comma-separated list of user IDs, or {@code null} if
+     * no user IDs were found.
+     */
+    public String getUsersForAudit() {
+<span class="nc" id="L547">        return AuthUtil.getUsers(authInfo);</span>
+    }
+
+    public TxnDigest getTxnDigest() {
+<span class="nc" id="L551">        return txnDigest;</span>
+    }
+
+    public void setTxnDigest(TxnDigest txnDigest) {
+<span class="nc" id="L555">        this.txnDigest = txnDigest;</span>
+<span class="nc" id="L556">    }</span>
+
+    public boolean isFromLearner() {
+<span class="nc" id="L559">        return owner instanceof LearnerHandler;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

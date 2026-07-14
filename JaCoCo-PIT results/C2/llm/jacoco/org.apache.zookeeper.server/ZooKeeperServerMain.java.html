@@ -1,0 +1,290 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ZooKeeperServerMain.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server</a> &gt; <span class="el_source">ZooKeeperServerMain.java</span></div><h1>ZooKeeperServerMain.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server;
+
+import java.io.IOException;
+import java.util.concurrent.CountDownLatch;
+import javax.management.JMException;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.zookeeper.audit.ZKAuditProvider;
+import org.apache.zookeeper.common.ConfigException;
+import org.apache.zookeeper.jmx.ManagedUtil;
+import org.apache.zookeeper.metrics.MetricsProvider;
+import org.apache.zookeeper.metrics.MetricsProviderLifeCycleException;
+import org.apache.zookeeper.metrics.impl.MetricsProviderBootstrap;
+import org.apache.zookeeper.server.admin.AdminServer;
+import org.apache.zookeeper.server.admin.AdminServer.AdminServerException;
+import org.apache.zookeeper.server.admin.AdminServerFactory;
+import org.apache.zookeeper.server.auth.ProviderRegistry;
+import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
+import org.apache.zookeeper.server.persistence.FileTxnSnapLog.DatadirException;
+import org.apache.zookeeper.server.util.JvmPauseMonitor;
+import org.apache.zookeeper.util.ServiceUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * This class starts and runs a standalone ZooKeeperServer.
+ */
+@InterfaceAudience.Public
+<span class="nc" id="L46">public class ZooKeeperServerMain {</span>
+
+<span class="nc" id="L48">    private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperServerMain.class);</span>
+
+    private static final String USAGE = &quot;Usage: ZooKeeperServerMain configfile | port datadir [ticktime] [maxcnxns]&quot;;
+
+    // ZooKeeper server supports two kinds of connection: unencrypted and encrypted.
+    private ServerCnxnFactory cnxnFactory;
+    private ServerCnxnFactory secureCnxnFactory;
+    private ContainerManager containerManager;
+    private MetricsProvider metricsProvider;
+    private AdminServer adminServer;
+
+    /*
+     * Start up the ZooKeeper server.
+     *
+     * @param args the configfile or the port datadir [ticktime]
+     */
+    public static void main(String[] args) {
+<span class="nc" id="L65">        ZooKeeperServerMain main = new ZooKeeperServerMain();</span>
+        try {
+<span class="nc" id="L67">            main.initializeAndRun(args);</span>
+<span class="nc" id="L68">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L69">            LOG.error(&quot;Invalid arguments, exiting abnormally&quot;, e);</span>
+<span class="nc" id="L70">            LOG.info(USAGE);</span>
+<span class="nc" id="L71">            System.err.println(USAGE);</span>
+<span class="nc" id="L72">            ZKAuditProvider.addServerStartFailureAuditLog();</span>
+<span class="nc" id="L73">            ServiceUtils.requestSystemExit(ExitCode.INVALID_INVOCATION.getValue());</span>
+<span class="nc" id="L74">        } catch (ConfigException e) {</span>
+<span class="nc" id="L75">            LOG.error(&quot;Invalid config, exiting abnormally&quot;, e);</span>
+<span class="nc" id="L76">            System.err.println(&quot;Invalid config, exiting abnormally&quot;);</span>
+<span class="nc" id="L77">            ZKAuditProvider.addServerStartFailureAuditLog();</span>
+<span class="nc" id="L78">            ServiceUtils.requestSystemExit(ExitCode.INVALID_INVOCATION.getValue());</span>
+<span class="nc" id="L79">        } catch (DatadirException e) {</span>
+<span class="nc" id="L80">            LOG.error(&quot;Unable to access datadir, exiting abnormally&quot;, e);</span>
+<span class="nc" id="L81">            System.err.println(&quot;Unable to access datadir, exiting abnormally&quot;);</span>
+<span class="nc" id="L82">            ZKAuditProvider.addServerStartFailureAuditLog();</span>
+<span class="nc" id="L83">            ServiceUtils.requestSystemExit(ExitCode.UNABLE_TO_ACCESS_DATADIR.getValue());</span>
+<span class="nc" id="L84">        } catch (AdminServerException e) {</span>
+<span class="nc" id="L85">            LOG.error(&quot;Unable to start AdminServer, exiting abnormally&quot;, e);</span>
+<span class="nc" id="L86">            System.err.println(&quot;Unable to start AdminServer, exiting abnormally&quot;);</span>
+<span class="nc" id="L87">            ZKAuditProvider.addServerStartFailureAuditLog();</span>
+<span class="nc" id="L88">            ServiceUtils.requestSystemExit(ExitCode.ERROR_STARTING_ADMIN_SERVER.getValue());</span>
+<span class="nc" id="L89">        } catch (Exception e) {</span>
+<span class="nc" id="L90">            LOG.error(&quot;Unexpected exception, exiting abnormally&quot;, e);</span>
+<span class="nc" id="L91">            ZKAuditProvider.addServerStartFailureAuditLog();</span>
+<span class="nc" id="L92">            ServiceUtils.requestSystemExit(ExitCode.UNEXPECTED_ERROR.getValue());</span>
+<span class="nc" id="L93">        }</span>
+<span class="nc" id="L94">        LOG.info(&quot;Exiting normally&quot;);</span>
+<span class="nc" id="L95">        ServiceUtils.requestSystemExit(ExitCode.EXECUTION_FINISHED.getValue());</span>
+<span class="nc" id="L96">    }</span>
+
+    protected void initializeAndRun(String[] args) throws ConfigException, IOException, AdminServerException {
+        try {
+<span class="nc" id="L100">            ManagedUtil.registerLog4jMBeans();</span>
+<span class="nc" id="L101">        } catch (JMException e) {</span>
+<span class="nc" id="L102">            LOG.warn(&quot;Unable to register log4j JMX control&quot;, e);</span>
+<span class="nc" id="L103">        }</span>
+
+<span class="nc" id="L105">        ServerConfig config = new ServerConfig();</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">        if (args.length == 1) {</span>
+<span class="nc" id="L107">            config.parse(args[0]);</span>
+        } else {
+<span class="nc" id="L109">            config.parse(args);</span>
+        }
+
+<span class="nc" id="L112">        runFromConfig(config);</span>
+<span class="nc" id="L113">    }</span>
+
+    /**
+     * Run from a ServerConfig.
+     * @param config ServerConfig to use.
+     * @throws IOException
+     * @throws AdminServerException
+     */
+    public void runFromConfig(ServerConfig config) throws IOException, AdminServerException {
+<span class="nc" id="L122">        LOG.info(&quot;Starting server&quot;);</span>
+<span class="nc" id="L123">        FileTxnSnapLog txnLog = null;</span>
+        try {
+            try {
+<span class="nc" id="L126">                metricsProvider = MetricsProviderBootstrap.startMetricsProvider(</span>
+<span class="nc" id="L127">                    config.getMetricsProviderClassName(),</span>
+<span class="nc" id="L128">                    config.getMetricsProviderConfiguration());</span>
+<span class="nc" id="L129">            } catch (MetricsProviderLifeCycleException error) {</span>
+<span class="nc" id="L130">                throw new IOException(&quot;Cannot boot MetricsProvider &quot; + config.getMetricsProviderClassName(), error);</span>
+<span class="nc" id="L131">            }</span>
+<span class="nc" id="L132">            ServerMetrics.metricsProviderInitialized(metricsProvider);</span>
+<span class="nc" id="L133">            ProviderRegistry.initialize();</span>
+            // Note that this thread isn't going to be doing anything else,
+            // so rather than spawning another thread, we will just call
+            // run() in this thread.
+            // create a file logger url from the command line args
+<span class="nc" id="L138">            txnLog = new FileTxnSnapLog(config.dataLogDir, config.dataDir);</span>
+<span class="nc" id="L139">            JvmPauseMonitor jvmPauseMonitor = null;</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">            if (config.jvmPauseMonitorToRun) {</span>
+<span class="nc" id="L141">                jvmPauseMonitor = new JvmPauseMonitor(config);</span>
+            }
+<span class="nc" id="L143">            final ZooKeeperServer zkServer = new ZooKeeperServer(jvmPauseMonitor, txnLog, config.tickTime, config.minSessionTimeout, config.maxSessionTimeout, config.listenBacklog, null, config.initialConfig);</span>
+<span class="nc" id="L144">            txnLog.setServerStats(zkServer.serverStats());</span>
+
+            // Registers shutdown handler which will be used to know the
+            // server error or shutdown state changes.
+<span class="nc" id="L148">            final CountDownLatch shutdownLatch = new CountDownLatch(1);</span>
+<span class="nc" id="L149">            zkServer.registerServerShutdownHandler(new ZooKeeperServerShutdownHandler(shutdownLatch));</span>
+
+            // Start Admin server
+<span class="nc" id="L152">            adminServer = AdminServerFactory.createAdminServer();</span>
+<span class="nc" id="L153">            adminServer.setZooKeeperServer(zkServer);</span>
+<span class="nc" id="L154">            adminServer.start();</span>
+
+<span class="nc" id="L156">            boolean needStartZKServer = true;</span>
+<span class="nc bnc" id="L157" title="All 2 branches missed.">            if (config.getClientPortAddress() != null) {</span>
+<span class="nc" id="L158">                cnxnFactory = ServerCnxnFactory.createFactory();</span>
+<span class="nc" id="L159">                cnxnFactory.configure(config.getClientPortAddress(), config.getMaxClientCnxns(), config.getClientPortListenBacklog(), false);</span>
+<span class="nc" id="L160">                cnxnFactory.startup(zkServer);</span>
+                // zkServer has been started. So we don't need to start it again in secureCnxnFactory.
+<span class="nc" id="L162">                needStartZKServer = false;</span>
+            }
+<span class="nc bnc" id="L164" title="All 2 branches missed.">            if (config.getSecureClientPortAddress() != null) {</span>
+<span class="nc" id="L165">                secureCnxnFactory = ServerCnxnFactory.createFactory();</span>
+<span class="nc" id="L166">                secureCnxnFactory.configure(config.getSecureClientPortAddress(), config.getMaxClientCnxns(), config.getClientPortListenBacklog(), true);</span>
+<span class="nc" id="L167">                secureCnxnFactory.startup(zkServer, needStartZKServer);</span>
+            }
+
+<span class="nc" id="L170">            containerManager = new ContainerManager(zkServer.getZKDatabase(), zkServer.firstProcessor);</span>
+<span class="nc" id="L171">            containerManager.start();</span>
+<span class="nc" id="L172">            ZKAuditProvider.addZKStartStopAuditLog();</span>
+
+<span class="nc" id="L174">            serverStarted();</span>
+
+            // Watch status of ZooKeeper server. It will do a graceful shutdown
+            // if the server is not running or hits an internal error.
+<span class="nc" id="L178">            shutdownLatch.await();</span>
+
+<span class="nc" id="L180">            shutdown();</span>
+
+<span class="nc bnc" id="L182" title="All 2 branches missed.">            if (cnxnFactory != null) {</span>
+<span class="nc" id="L183">                cnxnFactory.join();</span>
+            }
+<span class="nc bnc" id="L185" title="All 2 branches missed.">            if (secureCnxnFactory != null) {</span>
+<span class="nc" id="L186">                secureCnxnFactory.join();</span>
+            }
+<span class="nc" id="L188">            zkServer.shutdown(true);</span>
+<span class="nc" id="L189">        } catch (InterruptedException e) {</span>
+            // warn, but generally this is ok
+<span class="nc" id="L191">            LOG.warn(&quot;Server interrupted&quot;, e);</span>
+        } finally {
+<span class="nc bnc" id="L193" title="All 2 branches missed.">            if (txnLog != null) {</span>
+<span class="nc" id="L194">                txnLog.close();</span>
+            }
+<span class="nc bnc" id="L196" title="All 2 branches missed.">            if (metricsProvider != null) {</span>
+                try {
+<span class="nc" id="L198">                    metricsProvider.stop();</span>
+<span class="nc" id="L199">                } catch (Throwable error) {</span>
+<span class="nc" id="L200">                    LOG.warn(&quot;Error while stopping metrics&quot;, error);</span>
+<span class="nc" id="L201">                }</span>
+            }
+        }
+<span class="nc" id="L204">    }</span>
+
+    /**
+     * Shutdown the serving instance
+     */
+    protected void shutdown() {
+<span class="nc bnc" id="L210" title="All 2 branches missed.">        if (containerManager != null) {</span>
+<span class="nc" id="L211">            containerManager.stop();</span>
+        }
+<span class="nc bnc" id="L213" title="All 2 branches missed.">        if (cnxnFactory != null) {</span>
+<span class="nc" id="L214">            cnxnFactory.shutdown();</span>
+        }
+<span class="nc bnc" id="L216" title="All 2 branches missed.">        if (secureCnxnFactory != null) {</span>
+<span class="nc" id="L217">            secureCnxnFactory.shutdown();</span>
+        }
+        try {
+<span class="nc bnc" id="L220" title="All 2 branches missed.">            if (adminServer != null) {</span>
+<span class="nc" id="L221">                adminServer.shutdown();</span>
+            }
+<span class="nc" id="L223">        } catch (AdminServerException e) {</span>
+<span class="nc" id="L224">            LOG.warn(&quot;Problem stopping AdminServer&quot;, e);</span>
+<span class="nc" id="L225">        }</span>
+<span class="nc" id="L226">    }</span>
+
+    // VisibleForTesting
+    ServerCnxnFactory getCnxnFactory() {
+<span class="nc" id="L230">        return cnxnFactory;</span>
+    }
+
+    // VisibleForTesting
+    ServerCnxnFactory getSecureCnxnFactory() {
+<span class="nc" id="L235">        return secureCnxnFactory;</span>
+    }
+
+    public int getClientPort() {
+<span class="nc bnc" id="L239" title="All 2 branches missed.">        if (cnxnFactory != null) {</span>
+<span class="nc" id="L240">            return cnxnFactory.getLocalPort();</span>
+        }
+<span class="nc" id="L242">        return 0;</span>
+    }
+
+    public int getSecureClientPort() {
+<span class="nc bnc" id="L246" title="All 2 branches missed.">        if (secureCnxnFactory != null) {</span>
+<span class="nc" id="L247">            return secureCnxnFactory.getLocalPort();</span>
+        }
+<span class="nc" id="L249">        return 0;</span>
+    }
+
+
+    /**
+     * Shutdowns properly the service, this method is not a public API.
+     */
+    public void close() {
+<span class="nc" id="L257">        ServerCnxnFactory primaryCnxnFactory = this.cnxnFactory;</span>
+<span class="nc" id="L258">        ServerCnxnFactory secondaryCnxnFactory = this.secureCnxnFactory;</span>
+        try {
+<span class="nc bnc" id="L260" title="All 2 branches missed.">            if (primaryCnxnFactory == null) {</span>
+                // in case of pure TLS we can hook into secureCnxnFactory
+<span class="nc" id="L262">                primaryCnxnFactory = secondaryCnxnFactory;</span>
+            }
+<span class="nc bnc" id="L264" title="All 4 branches missed.">            if (primaryCnxnFactory == null || primaryCnxnFactory.getZooKeeperServer() == null) {</span>
+<span class="nc" id="L265">                LOG.info(&quot;Connection factory did not start&quot;);</span>
+<span class="nc" id="L266">                return;</span>
+            }
+<span class="nc" id="L268">            ZooKeeperServerShutdownHandler zkShutdownHandler = primaryCnxnFactory.getZooKeeperServer().getZkShutdownHandler();</span>
+<span class="nc" id="L269">            zkShutdownHandler.handle(ZooKeeperServer.State.SHUTDOWN);</span>
+            try {
+                // ServerCnxnFactory will call the shutdown
+<span class="nc" id="L272">                primaryCnxnFactory.join();</span>
+<span class="nc" id="L273">            } catch (InterruptedException ex) {</span>
+<span class="nc" id="L274">                Thread.currentThread().interrupt();</span>
+<span class="nc" id="L275">            }</span>
+        } finally {
+            // ensure that we are closing the sockets
+<span class="nc bnc" id="L278" title="All 2 branches missed.">            if (primaryCnxnFactory != null) {</span>
+<span class="nc" id="L279">                primaryCnxnFactory.shutdown();</span>
+            }
+<span class="nc bnc" id="L281" title="All 2 branches missed.">            if (secondaryCnxnFactory != null) {</span>
+<span class="nc" id="L282">                secondaryCnxnFactory.shutdown();</span>
+            }
+        }
+<span class="nc" id="L285">    }</span>
+
+    protected void serverStarted() {
+<span class="nc" id="L288">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

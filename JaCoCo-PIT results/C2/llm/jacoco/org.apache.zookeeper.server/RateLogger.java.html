@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RateLogger.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server</a> &gt; <span class="el_source">RateLogger.java</span></div><h1>RateLogger.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server;
+
+import java.util.Objects;
+import org.apache.zookeeper.common.Time;
+import org.slf4j.Logger;
+
+/**
+ * This logs the message once in the beginning and once every LOG_INTERVAL.
+ */
+public class RateLogger {
+
+    private final long LOG_INTERVAL; // Duration is in ms
+
+    public RateLogger(Logger log) {
+<span class="nc" id="L33">        this(log, 100);</span>
+<span class="nc" id="L34">    }</span>
+
+<span class="nc" id="L36">    public RateLogger(Logger log, long interval) {</span>
+<span class="nc" id="L37">        LOG = log;</span>
+<span class="nc" id="L38">        LOG_INTERVAL = interval;</span>
+<span class="nc" id="L39">    }</span>
+
+    private final Logger LOG;
+<span class="nc" id="L42">    private String msg = null;</span>
+    private long timestamp;
+<span class="nc" id="L44">    private int count = 0;</span>
+<span class="nc" id="L45">    private String value = null;</span>
+
+    public void flush() {
+<span class="nc bnc" id="L48" title="All 4 branches missed.">        if (msg != null &amp;&amp; count &gt; 0) {</span>
+            // Optimized logging using parameterized messages to reduce string concatenation overhead
+<span class="nc bnc" id="L50" title="All 2 branches missed.">            if (count &gt; 1) {</span>
+<span class="nc bnc" id="L51" title="All 2 branches missed.">                if (value != null) {</span>
+<span class="nc" id="L52">                    LOG.warn(&quot;[{} times] Message: {} Last value:{}&quot;, count, msg, value);</span>
+                } else {
+<span class="nc" id="L54">                    LOG.warn(&quot;[{} times] Message: {}&quot;, count, msg);</span>
+                }
+            } else {
+<span class="nc bnc" id="L57" title="All 2 branches missed.">                if (value != null) {</span>
+<span class="nc" id="L58">                    LOG.warn(&quot;Message: {} Value:{}&quot;, msg, value);</span>
+                } else {
+<span class="nc" id="L60">                    LOG.warn(&quot;Message: {}&quot;, msg);</span>
+                }
+            }
+        }
+<span class="nc" id="L64">        msg = null;</span>
+<span class="nc" id="L65">        value = null;</span>
+<span class="nc" id="L66">        count = 0;</span>
+<span class="nc" id="L67">    }</span>
+
+    public void rateLimitLog(String newMsg) {
+<span class="nc" id="L70">        rateLimitLog(newMsg, null);</span>
+<span class="nc" id="L71">    }</span>
+
+    /**
+     * In addition to the message, it also takes a value.
+     */
+    public void rateLimitLog(String newMsg, String newValue) {
+<span class="nc" id="L77">        long now = Time.currentElapsedTime();</span>
+        // Optimized string comparison: use reference equality first for constant strings
+<span class="nc bnc" id="L79" title="All 4 branches missed.">        if (newMsg == msg || Objects.equals(newMsg, msg)) {</span>
+<span class="nc" id="L80">            ++count;</span>
+<span class="nc" id="L81">            value = newValue;</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">            if (now - timestamp &gt;= LOG_INTERVAL) {</span>
+<span class="nc" id="L83">                flush();</span>
+<span class="nc" id="L84">                msg = newMsg;</span>
+<span class="nc" id="L85">                timestamp = now;</span>
+<span class="nc" id="L86">                value = newValue;</span>
+            }
+        } else {
+<span class="nc" id="L89">            flush();</span>
+<span class="nc" id="L90">            msg = newMsg;</span>
+<span class="nc" id="L91">            value = newValue;</span>
+<span class="nc" id="L92">            timestamp = now;</span>
+<span class="nc" id="L93">            LOG.warn(&quot;Message:{} Value:{}&quot;, msg, value);</span>
+        }
+<span class="nc" id="L95">    }</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

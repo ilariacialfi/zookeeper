@@ -1,0 +1,330 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DnsSrvHostProvider.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.client</a> &gt; <span class="el_source">DnsSrvHostProvider.java</span></div><h1>DnsSrvHostProvider.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.client;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.zookeeper.common.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.xbill.DNS.Lookup;
+import org.xbill.DNS.Record;
+import org.xbill.DNS.SRVRecord;
+import org.xbill.DNS.Type;
+
+/**
+ * DNS SRV-based HostProvider that dynamically resolves host port names from DNS SRV records.
+ *
+ * &lt;p&gt;This implementation periodically refreshes the server list by querying DNS SRV records
+ * and uses HostConnectionManager for all connection management and reconfiguration logic.&lt;/p&gt;
+ *
+ * &lt;p&gt;&lt;strong&gt;Two-Phase Update Strategy:&lt;/strong&gt;&lt;/p&gt;
+ * &lt;ul&gt;
+ * &lt;li&gt;&lt;strong&gt;Phase 1 (Background):&lt;/strong&gt; Timer thread detects DNS changes without caching results&lt;/li&gt;
+ * &lt;li&gt;&lt;strong&gt;Phase 2 (Connection-time):&lt;/strong&gt; Fresh DNS lookup during connect attempt if changes detected&lt;/li&gt;
+ * &lt;/ul&gt;
+ */
+@InterfaceAudience.Public
+public final class DnsSrvHostProvider implements HostProvider {
+<span class="nc" id="L57">    private static final Logger LOG = LoggerFactory.getLogger(DnsSrvHostProvider.class);</span>
+
+    public interface DnsSrvResolver {
+        SRVRecord[] lookupSrvRecords(String dnsSrvName) throws IOException;
+    }
+
+    private final String dnsSrvName;
+    private final DnsSrvResolver dnsResolver;
+
+    private final HostConnectionManager connectionManager;
+    // Track the previous server list to detect changes
+    private volatile Set&lt;InetSocketAddress&gt; previousServerSet;
+    private Timer dnsRefreshTimer;
+
+    // Track the current connected host for accurate load balancing decisions
+<span class="nc" id="L72">    private final AtomicReference&lt;InetSocketAddress&gt; currentConnectedHost = new AtomicReference&lt;&gt;();</span>
+<span class="nc" id="L73">    private final AtomicBoolean serverListChanged = new AtomicBoolean(false);</span>
+
+    /**
+     * Constructs a DnsSrvHostProvider with the given DNS name
+     *
+     * @param dnsSrvName the DNS name to query for SRV records
+     * @throws IllegalArgumentException if dnsSrvName is null or empty or invalid
+     *                                  or if no SRV records are found for the DNS name
+     *                                  or if DNS lookup fails
+     */
+    public DnsSrvHostProvider(final String dnsSrvName) {
+<span class="nc" id="L84">        this(dnsSrvName, null);</span>
+<span class="nc" id="L85">    }</span>
+
+
+    /**
+     * Constructs a DnsSrvHostProvider with the given DNS name and ZKClientConfig
+     *
+     * @param dnsSrvName the DNS name to query for SRV records
+     * @param clientConfig ZooKeeper client configuration
+     * @throws IllegalArgumentException if dnsSrvName is null or empty or invalid
+     *                                  or if no SRV records are found for the DNS name
+     *                                  or if DNS lookup fails
+     */
+    public DnsSrvHostProvider(final String dnsSrvName, final ZKClientConfig clientConfig) {
+<span class="nc" id="L98">        this(dnsSrvName, System.currentTimeMillis() ^ dnsSrvName.hashCode(), clientConfig);</span>
+<span class="nc" id="L99">    }</span>
+
+    /**
+     * Constructs a DnsSrvHostProvider with the given DNS name, randomness seed and ZKClientConfig
+     *
+     * @param dnsSrvName the DNS name to query for SRV records
+     * @param randomnessSeed seed for randomization
+     * @param clientConfig ZooKeeper client configuration
+     * @throws IllegalArgumentException if dnsSrvName is null or empty or invalid
+     *                                  or if no SRV records are found for the DNS name
+     *                                  or if DNS lookup fails
+     */
+    public DnsSrvHostProvider(final String dnsSrvName, final long randomnessSeed, final ZKClientConfig clientConfig) {
+<span class="nc" id="L112">        this(dnsSrvName, randomnessSeed, new DefaultDnsResolver(), clientConfig);</span>
+<span class="nc" id="L113">    }</span>
+
+    /**
+     * Constructs a DnsSrvHostProvider with the given DNS name, randomization seed, DNS resolver and ZKClientConfig
+     *
+     * @param dnsSrvName the DNS name to query for SRV records
+     * @param randomnessSeed seed for randomization
+     * @param dnsResolver custom DNS resolver
+     * @param clientConfig ZooKeeper client configuration
+     * @throws IllegalArgumentException if dnsSrvName is null or empty or invalid
+     *                                  or if no SRV records are found for the DNS name
+     *                                  or if DNS lookup fails
+     */
+<span class="nc" id="L126">    public DnsSrvHostProvider(final String dnsSrvName, final long randomnessSeed, final DnsSrvResolver dnsResolver, final ZKClientConfig clientConfig) {</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        if (StringUtils.isBlank(dnsSrvName)) {</span>
+<span class="nc" id="L128">            throw new IllegalArgumentException(&quot;DNS name cannot be null or empty&quot;);</span>
+        }
+
+<span class="nc" id="L131">        this.dnsSrvName = dnsSrvName;</span>
+<span class="nc" id="L132">        this.dnsResolver = dnsResolver;</span>
+        try {
+<span class="nc" id="L134">            final List&lt;InetSocketAddress&gt; serverAddresses = lookupDnsSrvRecords();</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">            if (serverAddresses.isEmpty()) {</span>
+<span class="nc" id="L136">                LOG.error(&quot;No SRV records found for DNS name: {}&quot;, dnsSrvName);</span>
+<span class="nc" id="L137">                throw new IllegalArgumentException(&quot;No SRV records found for DNS name: &quot; + dnsSrvName);</span>
+            }
+
+<span class="nc" id="L140">            this.connectionManager = new HostConnectionManager(serverAddresses, randomnessSeed, clientConfig);</span>
+<span class="nc" id="L141">            this.previousServerSet = new HashSet&lt;&gt;(serverAddresses);</span>
+
+
+<span class="nc" id="L144">            final long refreshIntervalInSeconds = getRefreshInterval();</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">            if (refreshIntervalInSeconds &gt; 0) {</span>
+<span class="nc" id="L146">                dnsRefreshTimer = new Timer(&quot;DnsSrvRefresh-&quot; + dnsSrvName, true);</span>
+<span class="nc" id="L147">                dnsRefreshTimer.scheduleAtFixedRate(new TimerTask() {</span>
+                                                        @Override
+                                                        public void run() {
+<span class="nc" id="L150">                                                            refreshServerListInBackground();</span>
+<span class="nc" id="L151">                                                        }</span>
+                                                    },
+                        refreshIntervalInSeconds * 1000,
+                        refreshIntervalInSeconds * 1000);
+            }
+<span class="nc" id="L156">            LOG.info(&quot;DnsSrvHostProvider initialized with {} servers from DNS name: {} with refresh interval: {} seconds&quot;,</span>
+<span class="nc" id="L157">                    serverAddresses.size(), dnsSrvName, refreshIntervalInSeconds);</span>
+<span class="nc" id="L158">        } catch (final Exception e) {</span>
+<span class="nc" id="L159">            LOG.error(&quot;Failed to initialize DnsSrvHostProvider for DNS name: {}&quot;, dnsSrvName, e);</span>
+
+<span class="nc bnc" id="L161" title="All 2 branches missed.">            if (dnsRefreshTimer != null) {</span>
+<span class="nc" id="L162">                dnsRefreshTimer.cancel();</span>
+            }
+
+<span class="nc bnc" id="L165" title="All 2 branches missed.">            if (e instanceof IllegalArgumentException) {</span>
+<span class="nc" id="L166">                throw e;</span>
+            } else {
+<span class="nc" id="L168">                throw new IllegalArgumentException(&quot;Failed to initialize DnsSrvHostProvider for DNS name: &quot; + dnsSrvName, e);</span>
+            }
+<span class="nc" id="L170">        }</span>
+<span class="nc" id="L171">    }</span>
+
+    @Override
+    public int size() {
+<span class="nc" id="L175">        return connectionManager.size();</span>
+    }
+
+    @Override
+    public InetSocketAddress next(long spinDelay) {
+<span class="nc" id="L180">        applyServerListUpdate();</span>
+<span class="nc" id="L181">        return connectionManager.next(spinDelay);</span>
+    }
+
+    @Override
+    public void onConnected() {
+<span class="nc" id="L186">        currentConnectedHost.set(connectionManager.getServerAtCurrentIndex());</span>
+<span class="nc" id="L187">        connectionManager.onConnected();</span>
+<span class="nc" id="L188">    }</span>
+
+    @Override
+    public boolean updateServerList(Collection&lt;InetSocketAddress&gt; serverAddresses, InetSocketAddress currentHost) {
+<span class="nc" id="L192">        return connectionManager.updateServerList(serverAddresses, currentHost);</span>
+    }
+
+    @Override
+    public void close() {
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        if (dnsRefreshTimer != null) {</span>
+<span class="nc" id="L198">            dnsRefreshTimer.cancel();</span>
+        }
+<span class="nc" id="L200">    }</span>
+
+    private long getRefreshInterval() {
+<span class="nc" id="L203">        final long defaultInterval = ZKClientConfig.DNS_SRV_REFRESH_INTERVAL_SECONDS_DEFAULT;</span>
+<span class="nc" id="L204">        final long interval = Long.getLong(ZKClientConfig.DNS_SRV_REFRESH_INTERVAL_SECONDS, defaultInterval);</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">        if (interval &lt; 0) {</span>
+<span class="nc" id="L206">            LOG.error(&quot;Invalid DNS SRV refresh interval {} seconds&quot;, interval);</span>
+<span class="nc" id="L207">            throw new IllegalArgumentException(&quot;Invalid DNS SRV refresh interval: &quot; + interval);</span>
+        }
+<span class="nc bnc" id="L209" title="All 2 branches missed.">        if (interval == 0) {</span>
+<span class="nc" id="L210">            LOG.info(&quot;DNS SRV refresh disabled (interval = 0) for {}&quot;, dnsSrvName);</span>
+        }
+<span class="nc" id="L212">        return interval;</span>
+    }
+
+    private List&lt;InetSocketAddress&gt; lookupDnsSrvRecords() {
+<span class="nc" id="L216">        final List&lt;InetSocketAddress&gt; addresses = new ArrayList&lt;&gt;();</span>
+
+        try {
+<span class="nc" id="L219">            final SRVRecord[] srvRecords = dnsResolver.lookupSrvRecords(dnsSrvName);</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">            for (final SRVRecord srvRecord : srvRecords) {</span>
+<span class="nc" id="L221">                final InetSocketAddress address = createAddressFromSrvRecord(srvRecord);</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">                if (address != null) {</span>
+<span class="nc" id="L223">                    addresses.add(address);</span>
+                }
+            }
+<span class="nc" id="L226">        } catch (final Exception e) {</span>
+<span class="nc" id="L227">            LOG.error(&quot;DNS SRV lookup failed for {}&quot;, dnsSrvName, e);</span>
+<span class="nc" id="L228">            throw new RuntimeException(&quot;DNS SRV lookup failed for &quot; + dnsSrvName, e);</span>
+<span class="nc" id="L229">        }</span>
+<span class="nc" id="L230">        return addresses;</span>
+    }
+
+    private InetSocketAddress createAddressFromSrvRecord(final SRVRecord srvRecord) {
+<span class="nc bnc" id="L234" title="All 2 branches missed.">        if (srvRecord == null) {</span>
+<span class="nc" id="L235">            LOG.error(&quot;Null SRV record encountered from DnsSrvResolver implementation&quot;);</span>
+<span class="nc" id="L236">            return null;</span>
+        }
+
+        try {
+<span class="nc" id="L240">            final String target = srvRecord.getTarget().toString(true);</span>
+<span class="nc" id="L241">            final int port = srvRecord.getPort();</span>
+
+<span class="nc bnc" id="L243" title="All 4 branches missed.">            if (port &lt;= 0 || port &gt; 65535) {</span>
+<span class="nc" id="L244">                LOG.error(&quot;Invalid port {} in SRV record for target {}&quot;, port, target);</span>
+<span class="nc" id="L245">                return null;</span>
+            }
+
+<span class="nc bnc" id="L248" title="All 2 branches missed.">            if (StringUtils.isBlank(target)) {</span>
+<span class="nc" id="L249">                LOG.error(&quot;Empty or blank target in SRV record {}&quot;, srvRecord);</span>
+<span class="nc" id="L250">                return null;</span>
+            }
+
+<span class="nc" id="L253">            return new InetSocketAddress(target, port);</span>
+<span class="nc" id="L254">        } catch (final Exception e) {</span>
+<span class="nc" id="L255">            LOG.error(&quot;Failed to create InetSocketAddress from SRV record {}&quot;, srvRecord, e);</span>
+<span class="nc" id="L256">            return null;</span>
+        }
+    }
+
+    /**
+     * Performs background DNS refresh to detect server list changes without caching DNS responses.
+     *
+     * &lt;p&gt;&lt;strong&gt;Important:&lt;/strong&gt; This method only detects changes, the actual fresh DNS query happens
+     * in {@link #applyServerListUpdate()} when needed.&lt;/p&gt;
+     */
+    private void refreshServerListInBackground() {
+        try {
+            // Refresh the server list
+<span class="nc" id="L269">            final List&lt;InetSocketAddress&gt; newAddresses = lookupDnsSrvRecords();</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">            if (newAddresses.isEmpty()) {</span>
+<span class="nc" id="L271">                LOG.warn(&quot;DNS SRV lookup returned no records for {}, will retry on next refresh&quot;, dnsSrvName);</span>
+<span class="nc" id="L272">                return;</span>
+            }
+
+            // Check if server list has changed
+<span class="nc" id="L276">            final Set&lt;InetSocketAddress&gt; newServerSet = new HashSet&lt;&gt;(newAddresses);</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">            if (!Objects.equals(previousServerSet, newServerSet)) {</span>
+<span class="nc" id="L278">                serverListChanged.set(true);</span>
+<span class="nc" id="L279">                LOG.info(&quot;Server list change detected from DNS SRV: {} servers&quot;, newAddresses.size());</span>
+            }
+<span class="nc" id="L281">        } catch (final Exception e) {</span>
+<span class="nc" id="L282">            LOG.warn(&quot;Failed to refresh server list from DNS SRV records for {}: {}&quot;, dnsSrvName, e.getMessage());</span>
+<span class="nc" id="L283">        }</span>
+<span class="nc" id="L284">    }</span>
+
+    /**
+     * Apply pending server list updates when connection is actually needed.
+     * It is called from next() to ensure server list changes are applied with proper connection context.
+     */
+    private synchronized void applyServerListUpdate() {
+<span class="nc bnc" id="L291" title="All 2 branches missed.">        if (serverListChanged.get()) {</span>
+            try {
+                // Query DNS to get the updated server list
+<span class="nc" id="L294">                final List&lt;InetSocketAddress&gt; latestServerList = lookupDnsSrvRecords();</span>
+<span class="nc bnc" id="L295" title="All 2 branches missed.">                if (latestServerList.isEmpty()) {</span>
+<span class="nc" id="L296">                    LOG.warn(&quot;DNS SRV lookup returned no records for {}, will use the existing ones&quot;, dnsSrvName);</span>
+<span class="nc" id="L297">                    return;</span>
+                }
+
+<span class="nc" id="L300">                final boolean needReconnect = connectionManager.updateServerList(latestServerList, currentConnectedHost.get());</span>
+<span class="nc" id="L301">                previousServerSet = new HashSet&lt;&gt;(latestServerList);</span>
+<span class="nc" id="L302">                serverListChanged.set(false);</span>
+
+<span class="nc" id="L304">                LOG.info(&quot;Applied server list update during connection attempt. servers size: {}, need reconnection: {}&quot;,</span>
+<span class="nc" id="L305">                        latestServerList.size(), needReconnect);</span>
+<span class="nc" id="L306">            } catch (final Exception e) {</span>
+<span class="nc" id="L307">                LOG.warn(&quot;Failed to apply server list update&quot;, e);</span>
+<span class="nc" id="L308">            }</span>
+        }
+<span class="nc" id="L310">    }</span>
+
+    private static class DefaultDnsResolver implements DnsSrvResolver {
+        @Override
+        public SRVRecord[] lookupSrvRecords(final String dnsSrvName) throws IOException {
+<span class="nc" id="L315">            final Lookup lookup = new Lookup(dnsSrvName, Type.SRV);</span>
+<span class="nc" id="L316">            final Record[] records = lookup.run();</span>
+<span class="nc bnc" id="L317" title="All 2 branches missed.">            if (lookup.getResult() != Lookup.SUCCESSFUL) {</span>
+<span class="nc" id="L318">                final String errorMsg = lookup.getErrorString();</span>
+<span class="nc" id="L319">                throw new IOException(&quot;DNS SRV lookup failed for &quot; + dnsSrvName + &quot;: &quot; + errorMsg);</span>
+            }
+
+<span class="nc bnc" id="L322" title="All 2 branches missed.">            if (records == null) {</span>
+<span class="nc" id="L323">                return new SRVRecord[0];</span>
+            }
+<span class="nc" id="L325">            return Arrays.stream(records).map(SRVRecord.class::cast).toArray(SRVRecord[]::new);</span>
+        }
+    }
+}
+
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

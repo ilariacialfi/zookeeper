@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SnapshotRecursiveSummary.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server</a> &gt; <span class="el_source">SnapshotRecursiveSummary.java</span></div><h1>SnapshotRecursiveSummary.java</h1><pre class="source lang-java linenums">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ * &lt;p&gt;
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * &lt;p&gt;
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+import org.apache.jute.BinaryInputArchive;
+import org.apache.jute.InputArchive;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.zookeeper.server.persistence.FileSnap;
+import org.apache.zookeeper.server.persistence.SnapStream;
+
+/**
+ * Recursively processes a snapshot file collecting child node count and summarizes the data size
+ * below each node.
+ * &quot;starting_node&quot; defines the node where the recursion starts
+ * &quot;max_depth&quot; defines the depth where the tool still writes to the output.
+ * 0 means there is no depth limit, every non-leaf node's stats will be displayed, 1 means it will
+ * only contain the starting node's and it's children's stats, 2 ads another level and so on.
+ * This ONLY affects the level of details displayed, NOT the calculation.
+ */
+<span class="nc" id="L43">@InterfaceAudience.Public public class SnapshotRecursiveSummary {</span>
+
+  /**
+   * USAGE: SnapsotRecursiveSummary snapshot_file starting_node max_depth
+   *
+   */
+  public static void main(String[] args) throws Exception {
+<span class="nc bnc" id="L50" title="All 2 branches missed.">    if (args.length != 3) {</span>
+<span class="nc" id="L51">      System.err.println(getUsage());</span>
+<span class="nc" id="L52">      System.exit(2);</span>
+    }
+<span class="nc" id="L54">    int maxDepth = 0;</span>
+    try {
+<span class="nc" id="L56">      maxDepth = Integer.parseInt(args[2]);</span>
+<span class="nc" id="L57">    } catch (NumberFormatException e) {</span>
+<span class="nc" id="L58">      System.err.println(getUsage());</span>
+<span class="nc" id="L59">      System.exit(2);</span>
+<span class="nc" id="L60">    }</span>
+
+<span class="nc" id="L62">    new SnapshotRecursiveSummary().run(args[0], args[1], maxDepth);</span>
+<span class="nc" id="L63">  }</span>
+
+  public void run(String snapshotFileName, String startingNode, int maxDepth) throws IOException {
+<span class="nc" id="L66">    File snapshotFile = new File(snapshotFileName);</span>
+<span class="nc" id="L67">    try (InputStream is = SnapStream.getInputStream(snapshotFile)) {</span>
+<span class="nc" id="L68">      InputArchive ia = BinaryInputArchive.getArchive(is);</span>
+
+<span class="nc" id="L70">      DataTree dataTree = new DataTree();</span>
+<span class="nc" id="L71">      Map&lt;Long, Integer&gt; sessions = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L72">      FileSnap.deserialize(dataTree, sessions, ia);</span>
+
+<span class="nc" id="L74">      printZnodeDetails(dataTree, startingNode, maxDepth);</span>
+    }
+<span class="nc" id="L76">  }</span>
+
+  private void printZnodeDetails(DataTree dataTree, String startingNode, int maxDepth) {
+<span class="nc" id="L79">    StringBuilder builder = new StringBuilder();</span>
+<span class="nc" id="L80">    printZnode(dataTree, startingNode, builder, 0, maxDepth);</span>
+<span class="nc" id="L81">    System.out.println(builder);</span>
+<span class="nc" id="L82">  }</span>
+
+  private long[] printZnode(DataTree dataTree, String name, StringBuilder builder, int level,
+      int maxDepth) {
+<span class="nc" id="L86">    DataNode n = dataTree.getNode(name);</span>
+    Set&lt;String&gt; children;
+<span class="nc" id="L88">    long dataSum = 0L;</span>
+<span class="nc" id="L89">    synchronized (n) { // keep findbugs happy</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">      if (n.data != null) {</span>
+<span class="nc" id="L91">        dataSum += n.data.length;</span>
+      }
+<span class="nc" id="L93">      children = n.getChildren();</span>
+<span class="nc" id="L94">    }</span>
+
+<span class="nc" id="L96">    long[] result = {1L, dataSum};</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">    if (children.size() == 0) {</span>
+<span class="nc" id="L98">      return result;</span>
+    }
+<span class="nc" id="L100">    StringBuilder childBuilder = new StringBuilder();</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">    for (String child : children) {</span>
+<span class="nc" id="L102">      long[] childResult =</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">          printZnode(dataTree, name + (name.equals(&quot;/&quot;) ? &quot;&quot; : &quot;/&quot;) + child, childBuilder,</span>
+              level + 1, maxDepth);
+<span class="nc" id="L105">      result[0] = result[0] + childResult[0];</span>
+<span class="nc" id="L106">      result[1] = result[1] + childResult[1];</span>
+<span class="nc" id="L107">    }</span>
+
+<span class="nc bnc" id="L109" title="All 4 branches missed.">    if (maxDepth == 0 || level &lt;= maxDepth) {</span>
+<span class="nc" id="L110">      String tab = String.join(&quot;&quot;, Collections.nCopies(level, &quot;--&quot;));</span>
+<span class="nc" id="L111">      builder.append(tab + &quot; &quot; + name + &quot;\n&quot;);</span>
+<span class="nc" id="L112">      builder.append(tab + &quot;   children: &quot; + (result[0] - 1) + &quot;\n&quot;);</span>
+<span class="nc" id="L113">      builder.append(tab + &quot;   data: &quot; + result[1] + &quot;\n&quot;);</span>
+<span class="nc" id="L114">      builder.append(childBuilder);</span>
+    }
+<span class="nc" id="L116">    return result;</span>
+  }
+
+  public static String getUsage() {
+<span class="nc" id="L120">    String newLine = System.getProperty(&quot;line.separator&quot;);</span>
+<span class="nc" id="L121">    return String.join(newLine,</span>
+        &quot;USAGE:&quot;,
+        newLine,
+        &quot;SnapshotRecursiveSummary  &lt;snapshot_file&gt;  &lt;starting_node&gt;  &lt;max_depth&gt;&quot;,
+        newLine,
+        &quot;snapshot_file:    path to the zookeeper snapshot&quot;,
+        &quot;starting_node:    the path in the zookeeper tree where the traversal should begin&quot;,
+        &quot;max_depth:        defines the depth where the tool still writes to the output. &quot;
+            + &quot;0 means there is no depth limit, every non-leaf node's stats will be displayed, &quot;
+            + &quot;1 means it will only contain the starting node's and it's children's stats, &quot;
+            + &quot;2 ads another level and so on. This ONLY affects the level of details displayed, &quot;
+            + &quot;NOT the calculation.&quot;);
+  }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,8 @@
+
+Xorg.apache.zookeeper.server.auth.SASLAuthenticationProvider#isValid(Ljava/lang/String;)Zi
+_zookeeper-server/src/main/java/org/apache/zookeeper/server/auth/SASLAuthenticationProvider.java2 2("2*
+2= =("
+= =(2:"
+2 2($
+idjava.lang.StringB?=
+;org.apache.zookeeper.server.auth.SASLAuthenticationProviderHX

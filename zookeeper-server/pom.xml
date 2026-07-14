@@ -195,6 +195,13 @@
       <groupId>dnsjava</groupId>
       <artifactId>dnsjava</artifactId>
     </dependency>
+    <dependency>
+      <groupId>org.evosuite</groupId>
+      <artifactId>evosuite-standalone-runtime</artifactId>
+      <version>1.2.0</version>
+      <scope>system</scope>
+      <systemPath>${user.home}/Desktop/tools/evosuite-standalone-runtime-1.2.0.jar</systemPath>
+    </dependency>
   </dependencies>
 
   <build>
@@ -381,7 +388,7 @@
                 <param>org.apache.zookeeper.server.admin.CommandResponse</param>
             </targetClasses>
             <targetTests>
-                <param>org.apache.zookeeper.test.manual.mtevolved.*</param>
+                <param>org.apache.zookeeper.test.*</param>
             </targetTests>
         </configuration>
     </plugin>

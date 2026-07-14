@@ -1,0 +1,1230 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Commands.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server.admin</a> &gt; <span class="el_source">Commands.java</span></div><h1>Commands.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server.admin;
+
+import static org.apache.zookeeper.server.persistence.FileSnap.SNAPSHOT_FILE_PREFIX;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import org.apache.zookeeper.Environment;
+import org.apache.zookeeper.Environment.Entry;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.Version;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.data.ACL;
+import org.apache.zookeeper.data.Id;
+import org.apache.zookeeper.server.DataNode;
+import org.apache.zookeeper.server.DataTree;
+import org.apache.zookeeper.server.ServerCnxnFactory;
+import org.apache.zookeeper.server.ServerMetrics;
+import org.apache.zookeeper.server.ZooKeeperServer;
+import org.apache.zookeeper.server.ZooTrace;
+import org.apache.zookeeper.server.auth.ProviderRegistry;
+import org.apache.zookeeper.server.auth.ServerAuthenticationProvider;
+import org.apache.zookeeper.server.persistence.SnapshotInfo;
+import org.apache.zookeeper.server.persistence.Util;
+import org.apache.zookeeper.server.quorum.Follower;
+import org.apache.zookeeper.server.quorum.FollowerZooKeeperServer;
+import org.apache.zookeeper.server.quorum.Leader;
+import org.apache.zookeeper.server.quorum.LeaderZooKeeperServer;
+import org.apache.zookeeper.server.quorum.MultipleAddresses;
+import org.apache.zookeeper.server.quorum.QuorumPeer;
+import org.apache.zookeeper.server.quorum.QuorumPeer.LearnerType;
+import org.apache.zookeeper.server.quorum.QuorumZooKeeperServer;
+import org.apache.zookeeper.server.quorum.ReadOnlyZooKeeperServer;
+import org.apache.zookeeper.server.quorum.flexible.QuorumVerifier;
+import org.apache.zookeeper.server.util.RateLimiter;
+import org.apache.zookeeper.server.util.ZxidUtils;
+import org.eclipse.jetty.http.HttpStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Class containing static methods for registering and running Commands, as well
+ * as default Command definitions.
+ *
+ * @see Command
+ * @see JettyAdminServer
+ */
+public class Commands {
+
+<span class="nc" id="L88">    static final Logger LOG = LoggerFactory.getLogger(Commands.class);</span>
+    // VisibleForTesting
+    static final String ADMIN_RATE_LIMITER_INTERVAL = &quot;zookeeper.admin.rateLimiterIntervalInMS&quot;;
+<span class="nc" id="L91">    private static final long rateLimiterInterval = Integer.parseInt(System.getProperty(ADMIN_RATE_LIMITER_INTERVAL, &quot;300000&quot;));</span>
+    // VisibleForTesting
+    static final String AUTH_INFO_SEPARATOR = &quot; &quot;;
+    // VisibleForTesting
+    static final String ROOT_PATH = &quot;/&quot;;
+
+    /** Maps command names to Command instances */
+<span class="nc" id="L98">    private static Map&lt;String, Command&gt; commands = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L99">    private static Set&lt;String&gt; primaryNames = new HashSet&lt;&gt;();</span>
+
+    /**
+     * Registers the given command. Registered commands can be run by passing
+     * any of their names to runCommand.
+     */
+    public static void registerCommand(Command command) {
+<span class="nc bnc" id="L106" title="All 2 branches missed.">        for (String name : command.getNames()) {</span>
+<span class="nc" id="L107">            Command prev = commands.put(name, command);</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">            if (prev != null) {</span>
+<span class="nc" id="L109">                LOG.warn(&quot;Re-registering command {} (primary name = {})&quot;, name, command.getPrimaryName());</span>
+            }
+<span class="nc" id="L111">        }</span>
+<span class="nc" id="L112">        primaryNames.add(command.getPrimaryName());</span>
+<span class="nc" id="L113">    }</span>
+
+    /**
+     * Run the registered command with name cmdName. Commands should not produce
+     * any exceptions; any (anticipated) errors should be reported in the
+     * &quot;error&quot; entry of the returned map. Likewise, if no command with the given
+     * name is registered, this will be noted in the &quot;error&quot; entry.
+     *
+     * @param cmdName
+     * @param zkServer
+     * @param kwargs String-valued keyword arguments to the command from HTTP GET request
+     *        (may be null if command requires no additional arguments)
+     * @param authInfo auth info for auth check
+     *        (null if command requires no auth check)
+     * @param request HTTP request
+     * @return Map representing response to command containing at minimum:
+     *    - &quot;command&quot; key containing the command's primary name
+     *    - &quot;error&quot; key containing a String error message or null if no error
+     */
+    public static CommandResponse runGetCommand(
+            String cmdName,
+            ZooKeeperServer zkServer,
+            Map&lt;String, String&gt; kwargs,
+            String authInfo,
+            HttpServletRequest request) {
+<span class="nc" id="L138">        return runCommand(cmdName, zkServer, kwargs, null, authInfo, request, true);</span>
+    }
+
+    /**
+     * Run the registered command with name cmdName. Commands should not produce
+     * any exceptions; any (anticipated) errors should be reported in the
+     * &quot;error&quot; entry of the returned map. Likewise, if no command with the given
+     * name is registered, this will be noted in the &quot;error&quot; entry.
+     *
+     * @param cmdName
+     * @param zkServer
+     * @param inputStream InputStream from HTTP POST request
+     * @return Map representing response to command containing at minimum:
+     *    - &quot;command&quot; key containing the command's primary name
+     *    - &quot;error&quot; key containing a String error message or null if no error
+     */
+    public static CommandResponse runPostCommand(
+            String cmdName,
+            ZooKeeperServer zkServer,
+            InputStream inputStream,
+            String authInfo,
+            HttpServletRequest request) {
+<span class="nc" id="L160">        return runCommand(cmdName, zkServer, null, inputStream, authInfo, request, false);</span>
+    }
+
+    private static CommandResponse runCommand(
+            String cmdName,
+            ZooKeeperServer zkServer,
+            Map&lt;String, String&gt; kwargs,
+            InputStream inputStream,
+            String authInfo,
+            HttpServletRequest request,
+            boolean isGet) {
+<span class="nc" id="L171">        Command command = getCommand(cmdName);</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">        if (command == null) {</span>
+            // set the status code to 200 to keep the current behavior of existing commands
+<span class="nc" id="L174">            LOG.warn(&quot;Unknown command&quot;);</span>
+<span class="nc" id="L175">            return new CommandResponse(cmdName, &quot;Unknown command: &quot; + cmdName, HttpServletResponse.SC_OK);</span>
+        }
+<span class="nc bnc" id="L177" title="All 6 branches missed.">        if (command.isServerRequired() &amp;&amp; (zkServer == null || !zkServer.isRunning())) {</span>
+            // set the status code to 200 to keep the current behavior of existing commands
+<span class="nc" id="L179">            LOG.warn(&quot;This ZooKeeper instance is not currently serving requests for command&quot;);</span>
+<span class="nc" id="L180">            return new CommandResponse(cmdName, &quot;This ZooKeeper instance is not currently serving requests&quot;, HttpServletResponse.SC_OK);</span>
+        }
+
+<span class="nc" id="L183">        final AuthRequest authRequest = command.getAuthRequest();</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">        if (authRequest != null) {</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">            if (authInfo == null) {</span>
+<span class="nc" id="L186">                LOG.warn(&quot;Auth info is missing for command&quot;);</span>
+<span class="nc" id="L187">                return new CommandResponse(cmdName, &quot;Auth info is missing for the command&quot;, HttpServletResponse.SC_UNAUTHORIZED);</span>
+            }
+            try {
+<span class="nc" id="L190">                final List&lt;Id&gt; ids = handleAuthentication(request, authInfo);</span>
+<span class="nc" id="L191">                handleAuthorization(zkServer, ids, authRequest.getPermission(), authRequest.getPath());</span>
+<span class="nc" id="L192">            } catch (final KeeperException.AuthFailedException e) {</span>
+<span class="nc" id="L193">                return new CommandResponse(cmdName, &quot;Not authenticated&quot;, HttpServletResponse.SC_UNAUTHORIZED);</span>
+<span class="nc" id="L194">            } catch (final KeeperException.NoAuthException e) {</span>
+<span class="nc" id="L195">                return new CommandResponse(cmdName, &quot;Not authorized&quot;, HttpServletResponse.SC_FORBIDDEN);</span>
+<span class="nc" id="L196">            } catch (final Exception e) {</span>
+<span class="nc" id="L197">                LOG.warn(&quot;Error occurred during auth for command&quot;, e);</span>
+<span class="nc" id="L198">                return new CommandResponse(cmdName, &quot;Error occurred during auth&quot;, HttpServletResponse.SC_INTERNAL_SERVER_ERROR);</span>
+<span class="nc" id="L199">            }</span>
+        }
+<span class="nc bnc" id="L201" title="All 2 branches missed.">        return isGet ? command.runGet(zkServer, kwargs) : command.runPost(zkServer, inputStream);</span>
+    }
+
+    private static List&lt;Id&gt; handleAuthentication(final HttpServletRequest request, final String authInfo) throws KeeperException.AuthFailedException {
+<span class="nc" id="L205">        final String[] authData = authInfo.split(AUTH_INFO_SEPARATOR);</span>
+        // for IP and x509, auth info only contains the schema and Auth Id will be extracted from HTTP request
+<span class="nc bnc" id="L207" title="All 4 branches missed.">        if (authData.length != 1 &amp;&amp; authData.length != 2) {</span>
+<span class="nc" id="L208">            LOG.warn(&quot;Invalid auth info length&quot;);</span>
+<span class="nc" id="L209">            throw new KeeperException.AuthFailedException();</span>
+        }
+
+<span class="nc" id="L212">        final String schema = authData[0];</span>
+<span class="nc" id="L213">        final ServerAuthenticationProvider authProvider = ProviderRegistry.getServerProvider(schema);</span>
+<span class="nc bnc" id="L214" title="All 2 branches missed.">        if (authProvider != null) {</span>
+            try {
+<span class="nc bnc" id="L216" title="All 2 branches missed.">                final byte[] auth = authData.length == 2 ? authData[1].getBytes(StandardCharsets.UTF_8) : null;</span>
+<span class="nc" id="L217">                final List&lt;Id&gt; ids = authProvider.handleAuthentication(request, auth);</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">                if (ids.isEmpty()) {</span>
+<span class="nc" id="L219">                    LOG.warn(&quot;Auth Id list is empty&quot;);</span>
+<span class="nc" id="L220">                    throw new KeeperException.AuthFailedException();</span>
+                }
+<span class="nc" id="L222">                return ids;</span>
+<span class="nc" id="L223">            } catch (final RuntimeException e) {</span>
+<span class="nc" id="L224">                LOG.warn(&quot;Caught runtime exception from AuthenticationProvider&quot;, e);</span>
+<span class="nc" id="L225">                throw new KeeperException.AuthFailedException();</span>
+            }
+        } else {
+<span class="nc" id="L228">            LOG.warn(&quot;Auth provider not found for schema&quot;);</span>
+<span class="nc" id="L229">            throw new KeeperException.AuthFailedException();</span>
+        }
+    }
+
+    /**
+     * Grant or deny authorization for a command by matching
+     * request-provided credentials with the ACLs present on a node.
+     *
+     * @param zkServer the ZooKeeper server object.
+     * @param ids the credentials extracted from the Authorization header.
+     * @param perm the set of permission bits required by the command.
+     * @param path the ZooKeeper node path whose ACLs should be used
+     * to satisfy the perm bits.
+     * @throws KeeperException.NoAuthException if one or more perm
+     * bits could not be satisfied.
+     */
+    private static void handleAuthorization(final ZooKeeperServer zkServer,
+                                            final List&lt;Id&gt; ids,
+                                            final int perm,
+                                            final String path)
+            throws KeeperException.NoNodeException, KeeperException.NoAuthException {
+<span class="nc" id="L250">        final DataNode dataNode = zkServer.getZKDatabase().getNode(path);</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">        if (dataNode == null) {</span>
+<span class="nc" id="L252">            throw new KeeperException.NoNodeException(path);</span>
+        }
+<span class="nc" id="L254">        final List&lt;ACL&gt; acls = zkServer.getZKDatabase().aclForNode(dataNode);</span>
+        // Check the individual bits of perm.
+<span class="nc" id="L256">        final int bitWidth = Integer.SIZE - Integer.numberOfLeadingZeros(perm);</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">        for (int b = 0; b &lt; bitWidth; b++) {</span>
+<span class="nc" id="L258">            final int permBit = 1 &lt;&lt; b;</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">            if ((perm &amp; permBit) != 0) {</span>
+<span class="nc" id="L260">                zkServer.checkACL(null, acls, permBit, ids, path, null);</span>
+            }
+        }
+<span class="nc" id="L263">    }</span>
+
+    /**
+     * Returns the primary names of all registered commands.
+     */
+    public static Set&lt;String&gt; getPrimaryNames() {
+<span class="nc" id="L269">        return primaryNames;</span>
+    }
+
+    /**
+     * Returns the commands registered under cmdName with registerCommand, or
+     * null if no command is registered with that name.
+     */
+    public static Command getCommand(String cmdName) {
+<span class="nc" id="L277">        return commands.get(cmdName);</span>
+    }
+
+    static {
+<span class="nc" id="L281">        registerCommand(new CnxnStatResetCommand());</span>
+<span class="nc" id="L282">        registerCommand(new ConfCommand());</span>
+<span class="nc" id="L283">        registerCommand(new ConsCommand());</span>
+<span class="nc" id="L284">        registerCommand(new DigestCommand());</span>
+<span class="nc" id="L285">        registerCommand(new DirsCommand());</span>
+<span class="nc" id="L286">        registerCommand(new DumpCommand());</span>
+<span class="nc" id="L287">        registerCommand(new EnvCommand());</span>
+<span class="nc" id="L288">        registerCommand(new GetTraceMaskCommand());</span>
+<span class="nc" id="L289">        registerCommand(new InitialConfigurationCommand());</span>
+<span class="nc" id="L290">        registerCommand(new IsroCommand());</span>
+<span class="nc" id="L291">        registerCommand(new LastSnapshotCommand());</span>
+<span class="nc" id="L292">        registerCommand(new LeaderCommand());</span>
+<span class="nc" id="L293">        registerCommand(new MonitorCommand());</span>
+<span class="nc" id="L294">        registerCommand(new ObserverCnxnStatResetCommand());</span>
+<span class="nc" id="L295">        registerCommand(new RestoreCommand());</span>
+<span class="nc" id="L296">        registerCommand(new RuokCommand());</span>
+<span class="nc" id="L297">        registerCommand(new SetTraceMaskCommand());</span>
+<span class="nc" id="L298">        registerCommand(new ShedConnectionsCommand());</span>
+<span class="nc" id="L299">        registerCommand(new SnapshotCommand());</span>
+<span class="nc" id="L300">        registerCommand(new SrvrCommand());</span>
+<span class="nc" id="L301">        registerCommand(new StatCommand());</span>
+<span class="nc" id="L302">        registerCommand(new StatResetCommand());</span>
+<span class="nc" id="L303">        registerCommand(new SyncedObserverConsCommand());</span>
+<span class="nc" id="L304">        registerCommand(new SystemPropertiesCommand());</span>
+<span class="nc" id="L305">        registerCommand(new VotingViewCommand());</span>
+<span class="nc" id="L306">        registerCommand(new WatchCommand());</span>
+<span class="nc" id="L307">        registerCommand(new WatchesByPathCommand());</span>
+<span class="nc" id="L308">        registerCommand(new WatchSummaryCommand());</span>
+<span class="nc" id="L309">        registerCommand(new ZabStateCommand());</span>
+<span class="nc" id="L310">    }</span>
+
+    /**
+     * Reset all connection statistics.
+     */
+    public static class CnxnStatResetCommand extends GetCommand {
+
+        public CnxnStatResetCommand() {
+<span class="nc" id="L318">            super(Arrays.asList(&quot;connection_stat_reset&quot;, &quot;crst&quot;));</span>
+<span class="nc" id="L319">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L323">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L324">            zkServer.getServerCnxnFactory().resetAllConnectionStats();</span>
+<span class="nc" id="L325">            return response;</span>
+
+        }
+
+    }
+
+    /**
+     * Server configuration parameters.
+     * @see ZooKeeperServer#getConf()
+     */
+    public static class ConfCommand extends GetCommand {
+
+        public ConfCommand() {
+<span class="nc" id="L338">            super(Arrays.asList(&quot;configuration&quot;, &quot;conf&quot;, &quot;config&quot;));</span>
+<span class="nc" id="L339">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L343">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L344">            response.putAll(zkServer.getConf().toMap());</span>
+<span class="nc" id="L345">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Information on client connections to server. Returned Map contains:
+     *   - &quot;connections&quot;: list of connection info objects
+     * @see org.apache.zookeeper.server.ServerCnxn#getConnectionInfo(boolean)
+     */
+    public static class ConsCommand extends GetCommand {
+
+        public ConsCommand() {
+<span class="nc" id="L358">            super(Arrays.asList(&quot;connections&quot;, &quot;cons&quot;));</span>
+<span class="nc" id="L359">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L363">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L364">            ServerCnxnFactory serverCnxnFactory = zkServer.getServerCnxnFactory();</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">            if (serverCnxnFactory != null) {</span>
+<span class="nc" id="L366">                response.put(&quot;connections&quot;, serverCnxnFactory.getAllConnectionInfo(false));</span>
+            } else {
+<span class="nc" id="L368">                response.put(&quot;connections&quot;, Collections.emptyList());</span>
+            }
+<span class="nc" id="L370">            ServerCnxnFactory secureServerCnxnFactory = zkServer.getSecureServerCnxnFactory();</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">            if (secureServerCnxnFactory != null) {</span>
+<span class="nc" id="L372">                response.put(&quot;secure_connections&quot;, secureServerCnxnFactory.getAllConnectionInfo(false));</span>
+            } else {
+<span class="nc" id="L374">                response.put(&quot;secure_connections&quot;, Collections.emptyList());</span>
+            }
+<span class="nc" id="L376">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Information on ZK datadir and snapdir size in bytes
+     */
+    public static class DirsCommand extends GetCommand {
+
+        public DirsCommand() {
+<span class="nc" id="L387">            super(Arrays.asList(&quot;dirs&quot;));</span>
+<span class="nc" id="L388">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L392">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L393">            response.put(&quot;datadir_size&quot;, zkServer.getDataDirSize());</span>
+<span class="nc" id="L394">            response.put(&quot;logdir_size&quot;, zkServer.getLogDirSize());</span>
+<span class="nc" id="L395">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Information on session expirations and ephemerals. Returned map contains:
+     *   - &quot;expiry_time_to_session_ids&quot;: Map&amp;lt;Long, Set&amp;lt;Long&amp;gt;&amp;gt;
+     *                                   time -&amp;gt; sessions IDs of sessions that expire at time
+     *   - &quot;session_id_to_ephemeral_paths&quot;: Map&amp;lt;Long, Set&amp;lt;String&amp;gt;&amp;gt;
+     *                                       session ID -&amp;gt; ephemeral paths created by that session
+     * @see ZooKeeperServer#getSessionExpiryMap()
+     * @see ZooKeeperServer#getEphemerals()
+     */
+    public static class DumpCommand extends GetCommand {
+
+        public DumpCommand() {
+<span class="nc" id="L412">            super(Arrays.asList(&quot;dump&quot;));</span>
+<span class="nc" id="L413">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L417">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L418">            response.put(&quot;expiry_time_to_session_ids&quot;, zkServer.getSessionExpiryMap());</span>
+<span class="nc" id="L419">            response.put(&quot;session_id_to_ephemeral_paths&quot;, zkServer.getEphemerals());</span>
+<span class="nc" id="L420">            return response;</span>
+        }
+
+    }
+
+    /**
+     * All defined environment variables.
+     */
+    public static class EnvCommand extends GetCommand {
+
+        public EnvCommand() {
+<span class="nc" id="L431">            super(Arrays.asList(&quot;environment&quot;, &quot;env&quot;, &quot;envi&quot;), false);</span>
+<span class="nc" id="L432">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L436">            CommandResponse response = initializeResponse();</span>
+<span class="nc bnc" id="L437" title="All 2 branches missed.">            for (Entry e : Environment.list()) {</span>
+<span class="nc" id="L438">                response.put(e.getKey(), e.getValue());</span>
+<span class="nc" id="L439">            }</span>
+<span class="nc" id="L440">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Digest histories for every specific number of txns.
+     */
+    public static class DigestCommand extends GetCommand {
+
+        public DigestCommand() {
+<span class="nc" id="L451">            super(Arrays.asList(&quot;hash&quot;));</span>
+<span class="nc" id="L452">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L456">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L457">            response.put(&quot;digests&quot;, zkServer.getZKDatabase().getDataTree().getDigestLog());</span>
+<span class="nc" id="L458">            return response;</span>
+        }
+
+    }
+
+    /**
+     * The current trace mask. Returned map contains:
+     *   - &quot;tracemask&quot;: Long
+     */
+    public static class GetTraceMaskCommand extends GetCommand {
+
+        public GetTraceMaskCommand() {
+<span class="nc" id="L470">            super(Arrays.asList(&quot;get_trace_mask&quot;, &quot;gtmk&quot;), false);</span>
+<span class="nc" id="L471">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L475">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L476">            response.put(&quot;tracemask&quot;, ZooTrace.getTextTraceLevel());</span>
+<span class="nc" id="L477">            return response;</span>
+        }
+
+    }
+
+    public static class InitialConfigurationCommand extends GetCommand {
+
+        public InitialConfigurationCommand() {
+<span class="nc" id="L485">            super(Arrays.asList(&quot;initial_configuration&quot;, &quot;icfg&quot;));</span>
+<span class="nc" id="L486">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L490">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L491">            response.put(&quot;initial_configuration&quot;, zkServer.getInitialConfig());</span>
+<span class="nc" id="L492">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Is this server in read-only mode. Returned map contains:
+     *   - &quot;is_read_only&quot;: Boolean
+     */
+    public static class IsroCommand extends GetCommand {
+
+        public IsroCommand() {
+<span class="nc" id="L504">            super(Arrays.asList(&quot;is_read_only&quot;, &quot;isro&quot;));</span>
+<span class="nc" id="L505">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L509">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L510">            response.put(&quot;read_only&quot;, zkServer instanceof ReadOnlyZooKeeperServer);</span>
+<span class="nc" id="L511">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Command returns information of the last snapshot that zookeeper server
+     * has finished saving to disk. During the time between the server starts up
+     * and it finishes saving its first snapshot, the command returns the zxid
+     * and last modified time of the snapshot file used for restoration at
+     * server startup. Returned map contains:
+     *   - &quot;zxid&quot;: String
+     *   - &quot;timestamp&quot;: Long
+     */
+    public static class LastSnapshotCommand extends GetCommand {
+
+        public LastSnapshotCommand() {
+<span class="nc" id="L528">            super(Arrays.asList(&quot;last_snapshot&quot;, &quot;lsnp&quot;));</span>
+<span class="nc" id="L529">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L533">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L534">            SnapshotInfo info = zkServer.getTxnLogFactory().getLastSnapshotInfo();</span>
+<span class="nc bnc" id="L535" title="All 2 branches missed.">            response.put(&quot;zxid&quot;, Long.toHexString(info == null ? -1L : info.zxid));</span>
+<span class="nc bnc" id="L536" title="All 2 branches missed.">            response.put(&quot;timestamp&quot;, info == null ? -1L : info.timestamp);</span>
+<span class="nc" id="L537">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Returns the leader status of this instance and the leader host string.
+     */
+    public static class LeaderCommand extends GetCommand {
+
+        public LeaderCommand() {
+<span class="nc" id="L548">            super(Arrays.asList(&quot;leader&quot;, &quot;lead&quot;));</span>
+<span class="nc" id="L549">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L553">            CommandResponse response = initializeResponse();</span>
+<span class="nc bnc" id="L554" title="All 2 branches missed.">            if (zkServer instanceof QuorumZooKeeperServer) {</span>
+<span class="nc" id="L555">                response.put(&quot;is_leader&quot;, zkServer instanceof LeaderZooKeeperServer);</span>
+<span class="nc" id="L556">                QuorumPeer peer = ((QuorumZooKeeperServer) zkServer).self;</span>
+<span class="nc" id="L557">                response.put(&quot;leader_id&quot;, peer.getLeaderId());</span>
+<span class="nc" id="L558">                String leaderAddress = peer.getLeaderAddress();</span>
+<span class="nc bnc" id="L559" title="All 2 branches missed.">                response.put(&quot;leader_ip&quot;, leaderAddress != null ? leaderAddress : &quot;&quot;);</span>
+<span class="nc" id="L560">            } else {</span>
+<span class="nc" id="L561">                response.put(&quot;error&quot;, &quot;server is not initialized&quot;);</span>
+            }
+<span class="nc" id="L563">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Some useful info for monitoring. Returned map contains:
+     *   - &quot;version&quot;: String
+     *                server version
+     *   - &quot;avg_latency&quot;: Long
+     *   - &quot;max_latency&quot;: Long
+     *   - &quot;min_latency&quot;: Long
+     *   - &quot;packets_received&quot;: Long
+     *   - &quot;packets_sents&quot;: Long
+     *   - &quot;num_alive_connections&quot;: Integer
+     *   - &quot;outstanding_requests&quot;: Long
+     *                             number of unprocessed requests
+     *   - &quot;server_state&quot;: &quot;leader&quot;, &quot;follower&quot;, or &quot;standalone&quot;
+     *   - &quot;znode_count&quot;: Integer
+     *   - &quot;watch_count&quot;: Integer
+     *   - &quot;ephemerals_count&quot;: Integer
+     *   - &quot;approximate_data_size&quot;: Long
+     *   - &quot;open_file_descriptor_count&quot;: Long (unix only)
+     *   - &quot;max_file_descriptor_count&quot;: Long (unix only)
+     *   - &quot;fsync_threshold_exceed_count&quot;: Long
+     *   - &quot;non_mtls_conn_count&quot;: Long
+     *   - &quot;non_mtls_remote_conn_count&quot;: Long
+     *   - &quot;non_mtls_local_conn_count&quot;: Long
+     *   - &quot;followers&quot;: Integer (leader only)
+     *   - &quot;synced_followers&quot;: Integer (leader only)
+     *   - &quot;pending_syncs&quot;: Integer (leader only)
+     */
+    public static class MonitorCommand extends GetCommand {
+
+        public MonitorCommand() {
+<span class="nc" id="L598">            super(Arrays.asList(&quot;monitor&quot;, &quot;mntr&quot;), false);</span>
+<span class="nc" id="L599">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L603">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L604">            zkServer.dumpMonitorValues(response::put);</span>
+<span class="nc" id="L605">            ServerMetrics.getMetrics().getMetricsProvider().dump(response::put);</span>
+<span class="nc" id="L606">            return response;</span>
+
+        }
+
+    }
+
+    /**
+     * Reset all observer connection statistics.
+     */
+    public static class ObserverCnxnStatResetCommand extends GetCommand {
+
+        public ObserverCnxnStatResetCommand() {
+<span class="nc" id="L618">            super(Arrays.asList(&quot;observer_connection_stat_reset&quot;, &quot;orst&quot;));</span>
+<span class="nc" id="L619">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L623">            CommandResponse response = initializeResponse();</span>
+<span class="nc bnc" id="L624" title="All 2 branches missed.">            if (zkServer instanceof LeaderZooKeeperServer) {</span>
+<span class="nc" id="L625">                Leader leader = ((LeaderZooKeeperServer) zkServer).getLeader();</span>
+<span class="nc" id="L626">                leader.resetObserverConnectionStats();</span>
+<span class="nc bnc" id="L627" title="All 2 branches missed.">            } else if (zkServer instanceof FollowerZooKeeperServer) {</span>
+<span class="nc" id="L628">                Follower follower = ((FollowerZooKeeperServer) zkServer).getFollower();</span>
+<span class="nc" id="L629">                follower.resetObserverConnectionStats();</span>
+            }
+<span class="nc" id="L631">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Restore from snapshot on the current server.
+     *
+     * Returned map contains:
+     *  - &quot;last_zxid&quot;: String
+     */
+    public static class RestoreCommand extends PostCommand {
+        static final String RESPONSE_DATA_LAST_ZXID = &quot;last_zxid&quot;;
+        static final String ADMIN_RESTORE_ENABLED = &quot;zookeeper.admin.restore.enabled&quot;;
+
+        private RateLimiter rateLimiter;
+
+        public RestoreCommand() {
+<span class="nc" id="L649">            super(Arrays.asList(&quot;restore&quot;, &quot;rest&quot;), true, new AuthRequest(ZooDefs.Perms.ALL, ROOT_PATH));</span>
+<span class="nc" id="L650">            rateLimiter = new RateLimiter(1, rateLimiterInterval, TimeUnit.MILLISECONDS);</span>
+<span class="nc" id="L651">        }</span>
+
+        @Override
+        public CommandResponse runPost(final ZooKeeperServer zkServer, final InputStream inputStream) {
+<span class="nc" id="L655">            final CommandResponse response = initializeResponse();</span>
+
+            // check feature flag
+<span class="nc" id="L658">            final boolean restoreEnabled = Boolean.parseBoolean(System.getProperty(ADMIN_RESTORE_ENABLED, &quot;true&quot;));</span>
+<span class="nc bnc" id="L659" title="All 2 branches missed.">            if (!restoreEnabled) {</span>
+<span class="nc" id="L660">                response.setStatusCode(HttpServletResponse.SC_SERVICE_UNAVAILABLE);</span>
+<span class="nc" id="L661">                LOG.warn(&quot;Restore command is disabled&quot;);</span>
+<span class="nc" id="L662">                return response;</span>
+            }
+
+<span class="nc bnc" id="L665" title="All 2 branches missed.">            if (!zkServer.isSerializeLastProcessedZxidEnabled()) {</span>
+<span class="nc" id="L666">                response.setStatusCode(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);</span>
+<span class="nc" id="L667">                LOG.warn(&quot;Restore command requires serializeLastProcessedZxidEnable flag is set to true&quot;);</span>
+<span class="nc" id="L668">                return response;</span>
+            }
+
+<span class="nc bnc" id="L671" title="All 2 branches missed.">            if (inputStream == null){</span>
+<span class="nc" id="L672">                response.setStatusCode(HttpServletResponse.SC_BAD_REQUEST);</span>
+<span class="nc" id="L673">                LOG.warn(&quot;InputStream from restore request is null&quot;);</span>
+<span class="nc" id="L674">                return response;</span>
+            }
+
+            // check rate limiting
+<span class="nc bnc" id="L678" title="All 2 branches missed.">            if (!rateLimiter.allow()) {</span>
+<span class="nc" id="L679">                response.setStatusCode(HttpStatus.TOO_MANY_REQUESTS_429);</span>
+<span class="nc" id="L680">                ServerMetrics.getMetrics().RESTORE_RATE_LIMITED_COUNT.add(1);</span>
+<span class="nc" id="L681">                LOG.warn(&quot;Restore request was rate limited&quot;);</span>
+<span class="nc" id="L682">                return response;</span>
+            }
+
+            // restore from snapshot InputStream
+            try {
+<span class="nc" id="L687">                final long lastZxid = zkServer.restoreFromSnapshot(inputStream);</span>
+<span class="nc" id="L688">                response.put(RESPONSE_DATA_LAST_ZXID, lastZxid);</span>
+<span class="nc" id="L689">            } catch (final Exception e) {</span>
+<span class="nc" id="L690">                response.setStatusCode(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);</span>
+<span class="nc" id="L691">                ServerMetrics.getMetrics().RESTORE_ERROR_COUNT.add(1);</span>
+<span class="nc" id="L692">                LOG.warn(&quot;Exception occurred when restore snapshot via the restore command&quot;, e);</span>
+<span class="nc" id="L693">            }</span>
+<span class="nc" id="L694">            return response;</span>
+        }
+    }
+
+    /**
+     * No-op command, check if the server is running
+     */
+    public static class RuokCommand extends GetCommand {
+
+        public RuokCommand() {
+<span class="nc" id="L704">            super(Arrays.asList(&quot;ruok&quot;));</span>
+<span class="nc" id="L705">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L709">            return initializeResponse();</span>
+        }
+
+    }
+
+    /**
+     * Sets the trace mask. Required arguments:
+     *   - &quot;traceMask&quot;: Long
+     *  Returned Map contains:
+     *   - &quot;tracemask&quot;: Long
+     */
+    public static class SetTraceMaskCommand extends GetCommand {
+
+        public SetTraceMaskCommand() {
+<span class="nc" id="L723">            super(Arrays.asList(&quot;set_trace_mask&quot;, &quot;stmk&quot;), false);</span>
+<span class="nc" id="L724">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L728">            CommandResponse response = initializeResponse();</span>
+            long traceMask;
+<span class="nc bnc" id="L730" title="All 2 branches missed.">            if (!kwargs.containsKey(&quot;traceMask&quot;)) {</span>
+<span class="nc" id="L731">                response.put(&quot;error&quot;, &quot;setTraceMask requires long traceMask argument&quot;);</span>
+<span class="nc" id="L732">                return response;</span>
+            }
+            try {
+<span class="nc" id="L735">                traceMask = Long.parseLong(kwargs.get(&quot;traceMask&quot;));</span>
+<span class="nc" id="L736">            } catch (NumberFormatException e) {</span>
+<span class="nc" id="L737">                response.put(&quot;error&quot;, &quot;setTraceMask requires long traceMask argument, got &quot; + kwargs.get(&quot;traceMask&quot;));</span>
+<span class="nc" id="L738">                return response;</span>
+<span class="nc" id="L739">            }</span>
+
+<span class="nc" id="L741">            ZooTrace.setTextTraceLevel(traceMask);</span>
+<span class="nc" id="L742">            response.put(&quot;tracemask&quot;, traceMask);</span>
+<span class="nc" id="L743">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Take a snapshot of current server and stream out the data.
+     *
+     *  Argument:
+     *   - &quot;streaming&quot;: optional String to indicate whether streaming out data
+     *
+     *  Returned snapshot as stream if streaming is true and metadata of the snapshot
+     *   - &quot;last_zxid&quot;: String
+     *   - &quot;snapshot_size&quot;: String
+     */
+    public static class SnapshotCommand extends GetCommand {
+        static final String REQUEST_QUERY_PARAM_STREAMING = &quot;streaming&quot;;
+
+        static final String RESPONSE_HEADER_LAST_ZXID = &quot;last_zxid&quot;;
+        static final String RESPONSE_HEADER_SNAPSHOT_SIZE = &quot;snapshot_size&quot;;
+
+        static final String ADMIN_SNAPSHOT_ENABLED = &quot;zookeeper.admin.snapshot.enabled&quot;;
+
+        private final RateLimiter rateLimiter;
+
+        public SnapshotCommand() {
+<span class="nc" id="L769">            super(Arrays.asList(&quot;snapshot&quot;, &quot;snap&quot;), true, new AuthRequest(ZooDefs.Perms.ALL, ROOT_PATH));</span>
+<span class="nc" id="L770">            rateLimiter = new RateLimiter(1, rateLimiterInterval, TimeUnit.MICROSECONDS);</span>
+<span class="nc" id="L771">        }</span>
+
+        @SuppressFBWarnings(value = &quot;OBL_UNSATISFIED_OBLIGATION&quot;,
+                justification = &quot;FileInputStream is passed to CommandResponse and closed in StreamOutputter&quot;)
+        @Override
+        public CommandResponse runGet(final ZooKeeperServer zkServer, final Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L777">            final CommandResponse response = initializeResponse();</span>
+
+            // check feature flag
+<span class="nc" id="L780">            final boolean snapshotEnabled = Boolean.parseBoolean(System.getProperty(ADMIN_SNAPSHOT_ENABLED, &quot;true&quot;));</span>
+<span class="nc bnc" id="L781" title="All 2 branches missed.">            if (!snapshotEnabled) {</span>
+<span class="nc" id="L782">                response.setStatusCode(HttpServletResponse.SC_SERVICE_UNAVAILABLE);</span>
+<span class="nc" id="L783">                LOG.warn(&quot;Snapshot command is disabled&quot;);</span>
+<span class="nc" id="L784">                return response;</span>
+            }
+
+<span class="nc bnc" id="L787" title="All 2 branches missed.">            if (!zkServer.isSerializeLastProcessedZxidEnabled()) {</span>
+<span class="nc" id="L788">                response.setStatusCode(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);</span>
+<span class="nc" id="L789">                LOG.warn(&quot;Snapshot command requires serializeLastProcessedZxidEnable flag is set to true&quot;);</span>
+<span class="nc" id="L790">                return response;</span>
+            }
+
+            // check rate limiting
+<span class="nc bnc" id="L794" title="All 2 branches missed.">            if (!rateLimiter.allow()) {</span>
+<span class="nc" id="L795">                response.setStatusCode(HttpStatus.TOO_MANY_REQUESTS_429);</span>
+<span class="nc" id="L796">                ServerMetrics.getMetrics().SNAPSHOT_RATE_LIMITED_COUNT.add(1);</span>
+<span class="nc" id="L797">                LOG.warn(&quot;Snapshot request was rate limited&quot;);</span>
+<span class="nc" id="L798">                return response;</span>
+            }
+
+            // check the streaming query param
+<span class="nc" id="L802">            boolean streaming = true;</span>
+<span class="nc bnc" id="L803" title="All 2 branches missed.">            if (kwargs.containsKey(REQUEST_QUERY_PARAM_STREAMING)) {</span>
+<span class="nc" id="L804">                streaming = Boolean.parseBoolean(kwargs.get(REQUEST_QUERY_PARAM_STREAMING));</span>
+            }
+
+            // take snapshot and stream out data if needed
+            try {
+<span class="nc" id="L809">                final File snapshotFile = zkServer.takeSnapshot(false, false);</span>
+<span class="nc" id="L810">                final long lastZxid = Util.getZxidFromName(snapshotFile.getName(), SNAPSHOT_FILE_PREFIX);</span>
+<span class="nc" id="L811">                response.addHeader(RESPONSE_HEADER_LAST_ZXID, &quot;0x&quot; + ZxidUtils.zxidToString(lastZxid));</span>
+
+<span class="nc" id="L813">                final long size = snapshotFile.length();</span>
+<span class="nc" id="L814">                response.addHeader(RESPONSE_HEADER_SNAPSHOT_SIZE, String.valueOf(size));</span>
+
+<span class="nc bnc" id="L816" title="All 2 branches missed.">                if (size == 0) {</span>
+<span class="nc" id="L817">                    response.setStatusCode(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);</span>
+<span class="nc" id="L818">                    ServerMetrics.getMetrics().SNAPSHOT_ERROR_COUNT.add(1);</span>
+<span class="nc" id="L819">                    LOG.warn(&quot;Snapshot file {} is empty&quot;, snapshotFile);</span>
+<span class="nc bnc" id="L820" title="All 2 branches missed.">                } else if (streaming) {</span>
+<span class="nc" id="L821">                    response.setInputStream(new FileInputStream(snapshotFile));</span>
+                }
+<span class="nc" id="L823">            } catch (final Exception e) {</span>
+<span class="nc" id="L824">                response.setStatusCode(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);</span>
+<span class="nc" id="L825">                ServerMetrics.getMetrics().SNAPSHOT_ERROR_COUNT.add(1);</span>
+<span class="nc" id="L826">                LOG.warn(&quot;Exception occurred when taking the snapshot via the snapshot admin command&quot;, e);</span>
+<span class="nc" id="L827">            }</span>
+<span class="nc" id="L828">            return response;</span>
+        }
+    }
+
+    /**
+     * Server information. Returned map contains:
+     *   - &quot;version&quot;: String
+     *                version of server
+     *   - &quot;read_only&quot;: Boolean
+     *                  is server in read-only mode
+     *   - &quot;server_stats&quot;: ServerStats object
+     *   - &quot;node_count&quot;: Integer
+     */
+    public static class SrvrCommand extends GetCommand {
+
+        public SrvrCommand() {
+<span class="nc" id="L844">            super(Arrays.asList(&quot;server_stats&quot;, &quot;srvr&quot;));</span>
+<span class="nc" id="L845">        }</span>
+
+        // Allow subclasses (e.g. StatCommand) to specify their own names
+        protected SrvrCommand(List&lt;String&gt; names) {
+<span class="nc" id="L849">            super(names);</span>
+<span class="nc" id="L850">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L854">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L855">            LOG.info(&quot;running stat&quot;);</span>
+<span class="nc" id="L856">            response.put(&quot;version&quot;, Version.getFullVersion());</span>
+<span class="nc" id="L857">            response.put(&quot;read_only&quot;, zkServer instanceof ReadOnlyZooKeeperServer);</span>
+<span class="nc" id="L858">            response.put(&quot;server_stats&quot;, zkServer.serverStats());</span>
+<span class="nc" id="L859">            response.put(&quot;client_response&quot;, zkServer.serverStats().getClientResponseStats());</span>
+<span class="nc bnc" id="L860" title="All 2 branches missed.">            if (zkServer instanceof LeaderZooKeeperServer) {</span>
+<span class="nc" id="L861">                Leader leader = ((LeaderZooKeeperServer) zkServer).getLeader();</span>
+<span class="nc" id="L862">                response.put(&quot;proposal_stats&quot;, leader.getProposalStats());</span>
+            }
+<span class="nc" id="L864">            response.put(&quot;node_count&quot;, zkServer.getZKDatabase().getNodeCount());</span>
+<span class="nc" id="L865">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Attempts to shed approximately the specified percentage of connections.
+     *
+     * Request: JSON input stream containing the following required field:
+     * - &quot;percentage&quot;: Integer [0-100] - percentage of connections to attempt shedding
+     *                                   value must be between 0 (no connections) and 100 (all connections).
+     *
+     * Response: JSON output stream containing:
+     * - &quot;connections_shed&quot;: Integer - actual number of connections successfully closed
+     *                                 may vary due to randomness.
+     * - &quot;percentage_requested&quot;: Integer - the percentage that was requested
+     */
+    public static class ShedConnectionsCommand extends PostCommand {
+        private static final String FIELD_PERCENTAGE = &quot;percentage&quot;;
+
+        public ShedConnectionsCommand() {
+<span class="nc" id="L886">            super(Arrays.asList(&quot;shed_connections&quot;, &quot;shed&quot;), true, new AuthRequest(ZooDefs.Perms.ALL, ROOT_PATH));</span>
+<span class="nc" id="L887">        }</span>
+
+        @Override
+        public CommandResponse runPost(final ZooKeeperServer zkServer, final InputStream inputStream) {
+<span class="nc" id="L891">            final CommandResponse response = initializeResponse();</span>
+
+<span class="nc bnc" id="L893" title="All 2 branches missed.">            if (inputStream == null) {</span>
+<span class="nc" id="L894">                response.setStatusCode(HttpServletResponse.SC_BAD_REQUEST);</span>
+<span class="nc" id="L895">                response.put(&quot;error&quot;, &quot;Request body is required&quot;);</span>
+<span class="nc" id="L896">                return response;</span>
+            }
+
+            try {
+<span class="nc" id="L900">                final ObjectMapper mapper = new ObjectMapper();</span>
+<span class="nc" id="L901">                final JsonNode jsonNode = mapper.readTree(inputStream);</span>
+
+<span class="nc bnc" id="L903" title="All 2 branches missed.">                if (!jsonNode.has(FIELD_PERCENTAGE)) {</span>
+<span class="nc" id="L904">                    response.setStatusCode(HttpServletResponse.SC_BAD_REQUEST);</span>
+<span class="nc" id="L905">                    response.put(&quot;error&quot;, &quot;Missing required field: &quot; + FIELD_PERCENTAGE);</span>
+<span class="nc" id="L906">                    return response;</span>
+                }
+
+<span class="nc" id="L909">                final int percentage = jsonNode.get(FIELD_PERCENTAGE).asInt();</span>
+<span class="nc bnc" id="L910" title="All 4 branches missed.">                if (percentage &lt; 0 || percentage &gt; 100) {</span>
+<span class="nc" id="L911">                    response.setStatusCode(HttpServletResponse.SC_BAD_REQUEST);</span>
+<span class="nc" id="L912">                    response.put(&quot;error&quot;, &quot;Percentage must be between 0 and 100&quot;);</span>
+<span class="nc" id="L913">                    return response;</span>
+                }
+
+<span class="nc" id="L916">                final ServerCnxnFactory factory = zkServer.getServerCnxnFactory();</span>
+<span class="nc" id="L917">                final ServerCnxnFactory secureFactory = zkServer.getSecureServerCnxnFactory();</span>
+
+<span class="nc" id="L919">                int connectionsShed = 0;</span>
+<span class="nc bnc" id="L920" title="All 2 branches missed.">                if (percentage &gt; 0) {</span>
+<span class="nc bnc" id="L921" title="All 2 branches missed.">                    if (factory != null) {</span>
+<span class="nc" id="L922">                        connectionsShed += factory.shedConnections(percentage);</span>
+                    }
+<span class="nc bnc" id="L924" title="All 2 branches missed.">                    if (secureFactory != null) {</span>
+<span class="nc" id="L925">                        connectionsShed += secureFactory.shedConnections(percentage);</span>
+                    }
+                }
+
+<span class="nc" id="L929">                response.put(&quot;connections_shed&quot;, connectionsShed);</span>
+<span class="nc" id="L930">                response.put(&quot;percentage_requested&quot;, percentage);</span>
+
+<span class="nc" id="L932">                LOG.info(&quot;Shed {} connections ({}%)&quot;, connectionsShed, percentage);</span>
+<span class="nc" id="L933">            } catch (final IOException e) {</span>
+<span class="nc" id="L934">                response.setStatusCode(HttpServletResponse.SC_BAD_REQUEST);</span>
+<span class="nc" id="L935">                response.put(&quot;error&quot;, &quot;Invalid JSON or failed to read request body: &quot; + e.getMessage());</span>
+<span class="nc" id="L936">            }</span>
+<span class="nc" id="L937">            return response;</span>
+        }
+    }
+
+    /**
+     * Same as SrvrCommand but has extra &quot;connections&quot; entry.
+     */
+    public static class StatCommand extends SrvrCommand {
+
+        public StatCommand() {
+<span class="nc" id="L947">            super(Arrays.asList(&quot;stats&quot;, &quot;stat&quot;));</span>
+<span class="nc" id="L948">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L952">            CommandResponse response = super.runGet(zkServer, kwargs);</span>
+
+            final Iterable&lt;Map&lt;String, Object&gt;&gt; connections;
+<span class="nc bnc" id="L955" title="All 2 branches missed.">            if (zkServer.getServerCnxnFactory() != null) {</span>
+<span class="nc" id="L956">                connections = zkServer.getServerCnxnFactory().getAllConnectionInfo(true);</span>
+            } else {
+<span class="nc" id="L958">                connections = Collections.emptyList();</span>
+            }
+<span class="nc" id="L960">            response.put(&quot;connections&quot;, connections);</span>
+
+            final Iterable&lt;Map&lt;String, Object&gt;&gt; secureConnections;
+<span class="nc bnc" id="L963" title="All 2 branches missed.">            if (zkServer.getSecureServerCnxnFactory() != null) {</span>
+<span class="nc" id="L964">                secureConnections = zkServer.getSecureServerCnxnFactory().getAllConnectionInfo(true);</span>
+            } else {
+<span class="nc" id="L966">                secureConnections = Collections.emptyList();</span>
+            }
+<span class="nc" id="L968">            response.put(&quot;secure_connections&quot;, secureConnections);</span>
+<span class="nc" id="L969">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Resets server statistics.
+     */
+    public static class StatResetCommand extends GetCommand {
+
+        public StatResetCommand() {
+<span class="nc" id="L980">            super(Arrays.asList(&quot;stat_reset&quot;, &quot;srst&quot;));</span>
+<span class="nc" id="L981">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L985">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L986">            zkServer.serverStats().reset();</span>
+<span class="nc" id="L987">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Information on observer connections to server. Returned Map contains:
+     *   - &quot;synced_observers&quot;: Integer (leader/follower only)
+     *   - &quot;observers&quot;: list of observer learner handler info objects (leader/follower only)
+     * @see org.apache.zookeeper.server.quorum.LearnerHandler#getLearnerHandlerInfo()
+     */
+    public static class SyncedObserverConsCommand extends GetCommand {
+
+        public SyncedObserverConsCommand() {
+<span class="nc" id="L1001">            super(Arrays.asList(&quot;observers&quot;, &quot;obsr&quot;));</span>
+<span class="nc" id="L1002">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+
+<span class="nc" id="L1007">            CommandResponse response = initializeResponse();</span>
+
+<span class="nc bnc" id="L1009" title="All 2 branches missed.">            if (zkServer instanceof LeaderZooKeeperServer) {</span>
+<span class="nc" id="L1010">                Leader leader = ((LeaderZooKeeperServer) zkServer).getLeader();</span>
+
+<span class="nc" id="L1012">                response.put(&quot;synced_observers&quot;, leader.getObservingLearners().size());</span>
+<span class="nc" id="L1013">                response.put(&quot;observers&quot;, leader.getObservingLearnersInfo());</span>
+<span class="nc" id="L1014">                return response;</span>
+<span class="nc bnc" id="L1015" title="All 2 branches missed.">            } else if (zkServer instanceof FollowerZooKeeperServer) {</span>
+<span class="nc" id="L1016">                Follower follower = ((FollowerZooKeeperServer) zkServer).getFollower();</span>
+<span class="nc" id="L1017">                Integer syncedObservers = follower.getSyncedObserverSize();</span>
+<span class="nc bnc" id="L1018" title="All 2 branches missed.">                if (syncedObservers != null) {</span>
+<span class="nc" id="L1019">                    response.put(&quot;synced_observers&quot;, syncedObservers);</span>
+<span class="nc" id="L1020">                    response.put(&quot;observers&quot;, follower.getSyncedObserversInfo());</span>
+<span class="nc" id="L1021">                    return response;</span>
+                }
+            }
+
+<span class="nc" id="L1025">            response.put(&quot;synced_observers&quot;, 0);</span>
+<span class="nc" id="L1026">            response.put(&quot;observers&quot;, Collections.emptySet());</span>
+<span class="nc" id="L1027">            return response;</span>
+        }
+
+    }
+
+    /**
+     * All defined system properties.
+     */
+    public static class SystemPropertiesCommand extends GetCommand {
+
+        public SystemPropertiesCommand() {
+<span class="nc" id="L1038">            super(Arrays.asList(&quot;system_properties&quot;, &quot;sysp&quot;), false);</span>
+<span class="nc" id="L1039">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L1043">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L1044">            Properties systemProperties = System.getProperties();</span>
+<span class="nc" id="L1045">            SortedMap&lt;String, String&gt; sortedSystemProperties = new TreeMap&lt;&gt;();</span>
+<span class="nc" id="L1046">            systemProperties.forEach((k, v) -&gt; sortedSystemProperties.put(k.toString(), v.toString()));</span>
+<span class="nc" id="L1047">            response.putAll(sortedSystemProperties);</span>
+<span class="nc" id="L1048">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Returns the current ensemble configuration information.
+     * It provides list of current voting members in the ensemble.
+     */
+    public static class VotingViewCommand extends GetCommand {
+
+        public VotingViewCommand() {
+<span class="nc" id="L1060">            super(Arrays.asList(&quot;voting_view&quot;));</span>
+<span class="nc" id="L1061">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L1065">            CommandResponse response = initializeResponse();</span>
+<span class="nc bnc" id="L1066" title="All 2 branches missed.">            if (zkServer instanceof QuorumZooKeeperServer) {</span>
+<span class="nc" id="L1067">                QuorumPeer peer = ((QuorumZooKeeperServer) zkServer).self;</span>
+<span class="nc" id="L1068">                Map&lt;Long, QuorumServerView&gt; votingView = peer.getVotingView().entrySet().stream()</span>
+<span class="nc" id="L1069">                        .collect(Collectors.toMap(Map.Entry::getKey, e -&gt; new QuorumServerView(e.getValue())));</span>
+<span class="nc" id="L1070">                response.put(&quot;current_config&quot;, votingView);</span>
+<span class="nc" id="L1071">            } else {</span>
+<span class="nc" id="L1072">                response.put(&quot;current_config&quot;, Collections.emptyMap());</span>
+            }
+<span class="nc" id="L1074">            return response;</span>
+        }
+
+        @SuppressFBWarnings(value = &quot;URF_UNREAD_FIELD&quot;, justification = &quot;class is used only for JSON serialization&quot;)
+        private static class QuorumServerView {
+
+            @JsonProperty
+            private List&lt;String&gt; serverAddresses;
+
+            @JsonProperty
+            private List&lt;String&gt; electionAddresses;
+
+            @JsonProperty
+            private String clientAddress;
+
+            @JsonProperty
+            private String learnerType;
+
+<span class="nc" id="L1092">            public QuorumServerView(QuorumPeer.QuorumServer quorumServer) {</span>
+<span class="nc" id="L1093">                this.serverAddresses = getMultiAddressString(quorumServer.addr);</span>
+<span class="nc" id="L1094">                this.electionAddresses = getMultiAddressString(quorumServer.electionAddr);</span>
+<span class="nc bnc" id="L1095" title="All 2 branches missed.">                this.learnerType = quorumServer.type.equals(LearnerType.PARTICIPANT) ? &quot;participant&quot; : &quot;observer&quot;;</span>
+<span class="nc" id="L1096">                this.clientAddress = getAddressString(quorumServer.clientAddr);</span>
+<span class="nc" id="L1097">            }</span>
+
+            private static List&lt;String&gt; getMultiAddressString(MultipleAddresses multipleAddresses) {
+<span class="nc bnc" id="L1100" title="All 2 branches missed.">                if (multipleAddresses == null) {</span>
+<span class="nc" id="L1101">                    return Collections.emptyList();</span>
+                }
+
+<span class="nc" id="L1104">                return multipleAddresses.getAllAddresses().stream()</span>
+<span class="nc" id="L1105">                        .map(QuorumServerView::getAddressString)</span>
+<span class="nc" id="L1106">                        .collect(Collectors.toList());</span>
+            }
+
+            private static String getAddressString(InetSocketAddress address) {
+<span class="nc bnc" id="L1110" title="All 2 branches missed.">                if (address == null) {</span>
+<span class="nc" id="L1111">                    return &quot;&quot;;</span>
+                }
+<span class="nc" id="L1113">                return String.format(&quot;%s:%d&quot;, QuorumPeer.QuorumServer.delimitedHostString(address), address.getPort());</span>
+            }
+       }
+
+    }
+
+    /**
+     * Watch information aggregated by session. Returned Map contains:
+     *   - &quot;session_id_to_watched_paths&quot;: Map&amp;lt;Long, Set&amp;lt;String&amp;gt;&amp;gt; session ID -&amp;gt; watched paths
+     * @see DataTree#getWatches()
+     * @see DataTree#getWatches()
+     */
+    public static class WatchCommand extends GetCommand {
+
+        public WatchCommand() {
+<span class="nc" id="L1128">            super(Arrays.asList(&quot;watches&quot;, &quot;wchc&quot;));</span>
+<span class="nc" id="L1129">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L1133">            DataTree dt = zkServer.getZKDatabase().getDataTree();</span>
+<span class="nc" id="L1134">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L1135">            response.put(&quot;session_id_to_watched_paths&quot;, dt.getWatches().toMap());</span>
+<span class="nc" id="L1136">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Watch information aggregated by path. Returned Map contains:
+     *   - &quot;path_to_session_ids&quot;: Map&amp;lt;String, Set&amp;lt;Long&amp;gt;&amp;gt; path -&amp;gt; session IDs of sessions watching path
+     * @see DataTree#getWatchesByPath()
+     */
+    public static class WatchesByPathCommand extends GetCommand {
+
+        public WatchesByPathCommand() {
+<span class="nc" id="L1149">            super(Arrays.asList(&quot;watches_by_path&quot;, &quot;wchp&quot;));</span>
+<span class="nc" id="L1150">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L1154">            DataTree dt = zkServer.getZKDatabase().getDataTree();</span>
+<span class="nc" id="L1155">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L1156">            response.put(&quot;path_to_session_ids&quot;, dt.getWatchesByPath().toMap());</span>
+<span class="nc" id="L1157">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Summarized watch information.
+     * @see DataTree#getWatchesSummary()
+     */
+    public static class WatchSummaryCommand extends GetCommand {
+
+        public WatchSummaryCommand() {
+<span class="nc" id="L1169">            super(Arrays.asList(&quot;watch_summary&quot;, &quot;wchs&quot;));</span>
+<span class="nc" id="L1170">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L1174">            DataTree dt = zkServer.getZKDatabase().getDataTree();</span>
+<span class="nc" id="L1175">            CommandResponse response = initializeResponse();</span>
+<span class="nc" id="L1176">            response.putAll(dt.getWatchesSummary().toMap());</span>
+<span class="nc" id="L1177">            return response;</span>
+        }
+
+    }
+
+    /**
+     * Returns the current phase of Zab protocol that peer is running.
+     * It can be in one of these phases: ELECTION, DISCOVERY, SYNCHRONIZATION, BROADCAST
+     */
+    public static class ZabStateCommand extends GetCommand {
+
+        public ZabStateCommand() {
+<span class="nc" id="L1189">            super(Arrays.asList(&quot;zabstate&quot;), false);</span>
+<span class="nc" id="L1190">        }</span>
+
+        @Override
+        public CommandResponse runGet(ZooKeeperServer zkServer, Map&lt;String, String&gt; kwargs) {
+<span class="nc" id="L1194">            CommandResponse response = initializeResponse();</span>
+<span class="nc bnc" id="L1195" title="All 2 branches missed.">            if (zkServer instanceof QuorumZooKeeperServer) {</span>
+<span class="nc" id="L1196">                QuorumPeer peer = ((QuorumZooKeeperServer) zkServer).self;</span>
+<span class="nc" id="L1197">                QuorumPeer.ZabState zabState = peer.getZabState();</span>
+<span class="nc" id="L1198">                QuorumVerifier qv = peer.getQuorumVerifier();</span>
+
+<span class="nc" id="L1200">                QuorumPeer.QuorumServer voter = qv.getVotingMembers().get(peer.getMyId());</span>
+<span class="nc bnc" id="L1201" title="All 2 branches missed.">                boolean voting = (</span>
+                        voter != null
+<span class="nc bnc" id="L1203" title="All 2 branches missed.">                                &amp;&amp; voter.addr.equals(peer.getQuorumAddress())</span>
+<span class="nc bnc" id="L1204" title="All 2 branches missed.">                                &amp;&amp; voter.electionAddr.equals(peer.getElectionAddress())</span>
+                );
+<span class="nc" id="L1206">                response.put(&quot;myid&quot;, zkServer.getConf().getServerId());</span>
+<span class="nc" id="L1207">                response.put(&quot;is_leader&quot;, zkServer instanceof LeaderZooKeeperServer);</span>
+<span class="nc" id="L1208">                response.put(&quot;quorum_address&quot;, peer.getQuorumAddress());</span>
+<span class="nc" id="L1209">                response.put(&quot;election_address&quot;, peer.getElectionAddress());</span>
+<span class="nc" id="L1210">                response.put(&quot;client_address&quot;, peer.getClientAddress());</span>
+<span class="nc" id="L1211">                response.put(&quot;voting&quot;, voting);</span>
+<span class="nc" id="L1212">                long lastProcessedZxid = zkServer.getZKDatabase().getDataTreeLastProcessedZxid();</span>
+<span class="nc" id="L1213">                response.put(&quot;last_zxid&quot;, &quot;0x&quot; + ZxidUtils.zxidToString(lastProcessedZxid));</span>
+<span class="nc" id="L1214">                response.put(&quot;zab_epoch&quot;, ZxidUtils.getEpochFromZxid(lastProcessedZxid));</span>
+<span class="nc" id="L1215">                response.put(&quot;zab_counter&quot;, ZxidUtils.getCounterFromZxid(lastProcessedZxid));</span>
+<span class="nc" id="L1216">                response.put(&quot;zabstate&quot;, zabState.name().toLowerCase());</span>
+<span class="nc" id="L1217">            } else {</span>
+<span class="nc" id="L1218">                response.put(&quot;voting&quot;, false);</span>
+<span class="nc" id="L1219">                response.put(&quot;zabstate&quot;, &quot;&quot;);</span>
+            }
+<span class="nc" id="L1221">            return response;</span>
+        }
+
+    }
+
+    private Commands() {
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

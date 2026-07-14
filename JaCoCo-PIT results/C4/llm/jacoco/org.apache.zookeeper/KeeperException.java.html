@@ -1,0 +1,870 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KeeperException.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper</a> &gt; <span class="el_source">KeeperException.java</span></div><h1>KeeperException.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper;
+
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import org.apache.yetus.audience.InterfaceAudience;
+
+@InterfaceAudience.Public
+@SuppressWarnings(&quot;java:S1133&quot;)
+public abstract class KeeperException extends Exception {
+
+    /**
+     * All multi-requests that result in an exception retain the results
+     * here so that it is possible to examine the problems in the catch
+     * scope.  Non-multi requests will get a null if they try to access
+     * these results.
+     */
+<span class="fc" id="L39">    private final AtomicReference&lt;List&lt;OpResult&gt;&gt; results = new AtomicReference&lt;&gt;();</span>
+
+    /**
+     * All non-specific keeper exceptions should be constructed via
+     * this factory method in order to guarantee consistency in error
+     * codes and such.  If you know the error code, then you should
+     * construct the special purpose exception directly.  That will
+     * allow you to have the most specific possible declarations of
+     * what exceptions might actually be thrown.
+     *
+     * @param code The error code.
+     * @param path The ZooKeeper path being operated on.
+     * @return The specialized exception, presumably to be thrown by
+     *  the caller.
+     */
+    public static KeeperException create(Code code, String path) {
+<span class="fc" id="L55">        KeeperException r = create(code);</span>
+<span class="fc" id="L56">        r.path.set(path);</span>
+<span class="fc" id="L57">        return r;</span>
+    }
+
+    /**
+     * @deprecated deprecated in 3.1.0, use {@link #create(Code, String)}
+     * instead
+     */
+    @Deprecated
+    public static KeeperException create(int code, String path) {
+<span class="fc" id="L66">        KeeperException r = create(Code.get(code));</span>
+<span class="fc" id="L67">        r.path.set(path);</span>
+<span class="fc" id="L68">        return r;</span>
+    }
+
+    /**
+     * @deprecated deprecated in 3.1.0, use {@link #create(Code)}
+     * instead
+     */
+    @Deprecated
+    public static KeeperException create(int code) {
+<span class="fc" id="L77">        return create(Code.get(code));</span>
+    }
+
+    /**
+     * All non-specific keeper exceptions should be constructed via
+     * this factory method in order to guarantee consistency in error
+     * codes and such.  If you know the error code, then you should
+     * construct the special purpose exception directly.  That will
+     * allow you to have the most specific possible declarations of
+     * what exceptions might actually be thrown.
+     *
+     * @param code The error code of your new exception.  This will
+     * also determine the specific type of the exception that is
+     * returned.
+     * @return The specialized exception, presumably to be thrown by
+     * the caller.
+     */
+    public static KeeperException create(Code code) {
+<span class="fc bfc" id="L95" title="All 31 branches covered.">        switch (code) {</span>
+        case SYSTEMERROR:
+<span class="fc" id="L97">            return new SystemErrorException();</span>
+        case RUNTIMEINCONSISTENCY:
+<span class="fc" id="L99">            return new RuntimeInconsistencyException();</span>
+        case DATAINCONSISTENCY:
+<span class="fc" id="L101">            return new DataInconsistencyException();</span>
+        case CONNECTIONLOSS:
+<span class="fc" id="L103">            return new ConnectionLossException();</span>
+        case MARSHALLINGERROR:
+<span class="fc" id="L105">            return new MarshallingErrorException();</span>
+        case UNIMPLEMENTED:
+<span class="fc" id="L107">            return new UnimplementedException();</span>
+        case OPERATIONTIMEOUT:
+<span class="fc" id="L109">            return new OperationTimeoutException();</span>
+        case NEWCONFIGNOQUORUM:
+<span class="fc" id="L111">            return new NewConfigNoQuorum();</span>
+        case RECONFIGINPROGRESS:
+<span class="fc" id="L113">            return new ReconfigInProgress();</span>
+        case BADARGUMENTS:
+<span class="fc" id="L115">            return new BadArgumentsException();</span>
+        case APIERROR:
+<span class="fc" id="L117">            return new APIErrorException();</span>
+        case NONODE:
+<span class="fc" id="L119">            return new NoNodeException();</span>
+        case NOAUTH:
+<span class="fc" id="L121">            return new NoAuthException();</span>
+        case BADVERSION:
+<span class="fc" id="L123">            return new BadVersionException();</span>
+        case NOCHILDRENFOREPHEMERALS:
+<span class="fc" id="L125">            return new NoChildrenForEphemeralsException();</span>
+        case NODEEXISTS:
+<span class="fc" id="L127">            return new NodeExistsException();</span>
+        case INVALIDACL:
+<span class="fc" id="L129">            return new InvalidACLException();</span>
+        case AUTHFAILED:
+<span class="fc" id="L131">            return new AuthFailedException();</span>
+        case NOTEMPTY:
+<span class="fc" id="L133">            return new NotEmptyException();</span>
+        case SESSIONEXPIRED:
+<span class="fc" id="L135">            return new SessionExpiredException();</span>
+        case INVALIDCALLBACK:
+<span class="fc" id="L137">            return new InvalidCallbackException();</span>
+        case SESSIONMOVED:
+<span class="fc" id="L139">            return new SessionMovedException();</span>
+        case NOTREADONLY:
+<span class="fc" id="L141">            return new NotReadOnlyException();</span>
+        case EPHEMERALONLOCALSESSION:
+<span class="fc" id="L143">            return new EphemeralOnLocalSessionException();</span>
+        case NOWATCHER:
+<span class="fc" id="L145">            return new NoWatcherException();</span>
+        case RECONFIGDISABLED:
+<span class="fc" id="L147">            return new ReconfigDisabledException();</span>
+        case SESSIONCLOSEDREQUIRESASLAUTH:
+<span class="fc" id="L149">            return new SessionClosedRequireAuthException();</span>
+        case REQUESTTIMEOUT:
+<span class="fc" id="L151">            return new RequestTimeoutException();</span>
+        case QUOTAEXCEEDED:
+<span class="fc" id="L153">            return new QuotaExceededException();</span>
+        case THROTTLEDOP:
+<span class="fc" id="L155">            return new ThrottledOpException();</span>
+        case OK:
+        default:
+<span class="fc" id="L158">            throw new IllegalArgumentException(&quot;Invalid exception code:&quot; + code.intValue());</span>
+        }
+    }
+
+    /**
+     * Set the code for this exception
+     * @param code error code
+     * @deprecated deprecated in 3.1.0, exceptions should be immutable, this
+     * method should not be used
+     */
+    @Deprecated
+    public void setCode(int code) {
+<span class="fc" id="L170">        this.errorCode.set(Code.get(code));</span>
+<span class="fc" id="L171">    }</span>
+
+    /**
+     * Legacy marker retained for compatibility.
+     *
+     * @deprecated since 3.1.0; use {@link Code}.
+     */
+    @Deprecated
+    @InterfaceAudience.Public
+    public interface CodeDeprecated {
+    }
+
+    private static final class CodeValues {
+        private static final int OK_VALUE = 0;
+        private static final int SYSTEM_ERROR = -1;
+        private static final int RUNTIME_INCONSISTENCY = -2;
+        private static final int DATA_INCONSISTENCY = -3;
+        private static final int CONNECTION_LOSS = -4;
+        private static final int MARSHALLING_ERROR = -5;
+        private static final int UNIMPLEMENTED_VALUE = -6;
+        private static final int OPERATION_TIMEOUT = -7;
+        private static final int BAD_ARGUMENTS = -8;
+        private static final int UNKNOWN_SESSION = -12;
+        private static final int NEW_CONFIG_NO_QUORUM = -13;
+        private static final int RECONFIG_IN_PROGRESS = -14;
+        private static final int API_ERROR = -100;
+        private static final int NO_NODE = -101;
+        private static final int NO_AUTH = -102;
+        private static final int BAD_VERSION = -103;
+        private static final int NO_CHILDREN_FOR_EPHEMERALS = -108;
+        private static final int NODE_EXISTS = -110;
+        private static final int NOT_EMPTY = -111;
+        private static final int SESSION_EXPIRED = -112;
+        private static final int INVALID_CALLBACK = -113;
+        private static final int INVALID_ACL = -114;
+        private static final int AUTH_FAILED = -115;
+        private static final int EPHEMERAL_ON_LOCAL_SESSION = -120;
+
+        private CodeValues() {
+        }
+    }
+
+    /** Codes which represent the various KeeperException
+     * types. This enum replaces the deprecated earlier static final int
+     * constants. The old, deprecated, values are in &quot;camel case&quot; while the new
+     * enum values are in all CAPS.
+     */
+<span class="fc" id="L218">    @InterfaceAudience.Public</span>
+    public enum Code implements CodeDeprecated {
+        /** Everything is OK */
+<span class="fc" id="L221">        OK(CodeValues.OK_VALUE),</span>
+
+        /** System and server-side errors.
+         * This is never thrown by the server, it shouldn't be used other than
+         * to indicate a range. Specifically error codes greater than this
+         * value, but lesser than {@link #APIERROR}, are system errors.
+         */
+<span class="fc" id="L228">        SYSTEMERROR(CodeValues.SYSTEM_ERROR),</span>
+
+        /** A runtime inconsistency was found */
+<span class="fc" id="L231">        RUNTIMEINCONSISTENCY(CodeValues.RUNTIME_INCONSISTENCY),</span>
+        /** A data inconsistency was found */
+<span class="fc" id="L233">        DATAINCONSISTENCY(CodeValues.DATA_INCONSISTENCY),</span>
+        /** Connection to the server has been lost */
+<span class="fc" id="L235">        CONNECTIONLOSS(CodeValues.CONNECTION_LOSS),</span>
+        /** Error while marshalling or unmarshalling data */
+<span class="fc" id="L237">        MARSHALLINGERROR(CodeValues.MARSHALLING_ERROR),</span>
+        /** Operation is unimplemented */
+<span class="fc" id="L239">        UNIMPLEMENTED(CodeValues.UNIMPLEMENTED_VALUE),</span>
+        /** Operation timeout */
+<span class="fc" id="L241">        OPERATIONTIMEOUT(CodeValues.OPERATION_TIMEOUT),</span>
+        /** Invalid arguments */
+<span class="fc" id="L243">        BADARGUMENTS(CodeValues.BAD_ARGUMENTS),</span>
+        /** No quorum of new config is connected and up-to-date with the leader of last committed config - try
+         *  invoking reconfiguration after new servers are connected and synced */
+<span class="fc" id="L246">        NEWCONFIGNOQUORUM(CodeValues.NEW_CONFIG_NO_QUORUM),</span>
+        /** Another reconfiguration is in progress -- concurrent reconfigs not supported (yet) */
+<span class="fc" id="L248">        RECONFIGINPROGRESS(CodeValues.RECONFIG_IN_PROGRESS),</span>
+        /** Unknown session (internal server use only) */
+<span class="fc" id="L250">        UNKNOWNSESSION(CodeValues.UNKNOWN_SESSION),</span>
+
+        /** API errors.
+         * This is never thrown by the server, it shouldn't be used other than
+         * to indicate a range. Specifically error codes greater than this
+         * value are API errors (while values less than this indicate a
+         * {@link #SYSTEMERROR}).
+         */
+<span class="fc" id="L258">        APIERROR(CodeValues.API_ERROR),</span>
+
+        /** Node does not exist */
+<span class="fc" id="L261">        NONODE(CodeValues.NO_NODE),</span>
+        /** Not authenticated */
+<span class="fc" id="L263">        NOAUTH(CodeValues.NO_AUTH),</span>
+        /** Version conflict
+         In case of reconfiguration: reconfig requested from config version X but last seen config has a different version Y */
+<span class="fc" id="L266">        BADVERSION(CodeValues.BAD_VERSION),</span>
+        /** Ephemeral nodes may not have children */
+<span class="fc" id="L268">        NOCHILDRENFOREPHEMERALS(CodeValues.NO_CHILDREN_FOR_EPHEMERALS),</span>
+        /** The node already exists */
+<span class="fc" id="L270">        NODEEXISTS(CodeValues.NODE_EXISTS),</span>
+        /** The node has children */
+<span class="fc" id="L272">        NOTEMPTY(CodeValues.NOT_EMPTY),</span>
+        /** The session has been expired by the server */
+<span class="fc" id="L274">        SESSIONEXPIRED(CodeValues.SESSION_EXPIRED),</span>
+        /** Invalid callback specified */
+<span class="fc" id="L276">        INVALIDCALLBACK(CodeValues.INVALID_CALLBACK),</span>
+        /** Invalid ACL specified */
+<span class="fc" id="L278">        INVALIDACL(CodeValues.INVALID_ACL),</span>
+        /** Client authentication failed */
+<span class="fc" id="L280">        AUTHFAILED(CodeValues.AUTH_FAILED),</span>
+        /** Session moved to another server, so operation is ignored */
+<span class="fc" id="L282">        SESSIONMOVED(-118),</span>
+        /** State-changing request is passed to read-only server */
+<span class="fc" id="L284">        NOTREADONLY(-119),</span>
+        /** Attempt to create ephemeral node on a local session */
+<span class="fc" id="L286">        EPHEMERALONLOCALSESSION(CodeValues.EPHEMERAL_ON_LOCAL_SESSION),</span>
+        /** Attempts to remove a non-existing watcher */
+<span class="fc" id="L288">        NOWATCHER(-121),</span>
+        /** Request not completed within max allowed time.*/
+<span class="fc" id="L290">        REQUESTTIMEOUT(-122),</span>
+        /** Attempts to perform a reconfiguration operation when reconfiguration feature is disabled. */
+<span class="fc" id="L292">        RECONFIGDISABLED(-123),</span>
+        /** The session has been closed by server because server requires client to do authentication
+         *  with configured authentication scheme at the server, but client is not configured with
+         *  required  authentication scheme or configured but authentication failed
+         *  (i.e. wrong credential used.). */
+<span class="fc" id="L297">        SESSIONCLOSEDREQUIRESASLAUTH(-124),</span>
+        /** Exceeded the quota that was set on the path.*/
+<span class="fc" id="L299">        QUOTAEXCEEDED(-125),</span>
+        /** Operation was throttled and not executed at all. This error code indicates that zookeeper server
+         *  is under heavy load and can't process incoming requests at full speed; please retry with back off.
+         */
+<span class="fc" id="L303">        THROTTLEDOP (-127);</span>
+
+<span class="fc" id="L305">        private static final Map&lt;Integer, Code&gt; lookup = new HashMap&lt;&gt;();</span>
+
+        static {
+<span class="fc bfc" id="L308" title="All 2 branches covered.">            for (Code c : EnumSet.allOf(Code.class)) {</span>
+<span class="fc" id="L309">                lookup.put(c.value, c);</span>
+<span class="fc" id="L310">            }</span>
+<span class="fc" id="L311">        }</span>
+
+        private final int value;
+<span class="fc" id="L314">        Code(int value) {</span>
+<span class="fc" id="L315">            this.value = value;</span>
+<span class="fc" id="L316">        }</span>
+
+        /**
+         * Get the int value for a particular Code.
+         * @return error code as integer
+         */
+        public int intValue() {
+<span class="fc" id="L323">            return value;</span>
+        }
+
+        /**
+         * Get the Code value for a particular integer error code
+         * @param code int error code
+         * @return Code value corresponding to specified int code, if null throws IllegalArgumentException
+         */
+        public static Code get(int code) {
+<span class="fc" id="L332">            Code codeVal = lookup.get(code);</span>
+<span class="fc bfc" id="L333" title="All 2 branches covered.">            if (codeVal == null) {</span>
+<span class="fc" id="L334">                throw new IllegalArgumentException(&quot;The current client version cannot lookup this code:&quot; + code);</span>
+            }
+<span class="fc" id="L336">            return codeVal;</span>
+        }
+    }
+
+    static String getCodeMessage(Code code) {
+<span class="pc bpc" id="L341" title="1 of 31 branches missed.">        switch (code) {</span>
+        case OK:
+<span class="nc" id="L343">            return &quot;ok&quot;;</span>
+        case SYSTEMERROR:
+<span class="fc" id="L345">            return &quot;SystemError&quot;;</span>
+        case RUNTIMEINCONSISTENCY:
+<span class="fc" id="L347">            return &quot;RuntimeInconsistency&quot;;</span>
+        case DATAINCONSISTENCY:
+<span class="fc" id="L349">            return &quot;DataInconsistency&quot;;</span>
+        case CONNECTIONLOSS:
+<span class="fc" id="L351">            return &quot;ConnectionLoss&quot;;</span>
+        case MARSHALLINGERROR:
+<span class="fc" id="L353">            return &quot;MarshallingError&quot;;</span>
+        case NEWCONFIGNOQUORUM:
+<span class="fc" id="L355">            return &quot;NewConfigNoQuorum&quot;;</span>
+        case RECONFIGINPROGRESS:
+<span class="fc" id="L357">            return &quot;ReconfigInProgress&quot;;</span>
+        case UNIMPLEMENTED:
+<span class="fc" id="L359">            return &quot;Unimplemented&quot;;</span>
+        case OPERATIONTIMEOUT:
+<span class="fc" id="L361">            return &quot;OperationTimeout&quot;;</span>
+        case BADARGUMENTS:
+<span class="fc" id="L363">            return &quot;BadArguments&quot;;</span>
+        case APIERROR:
+<span class="fc" id="L365">            return &quot;APIError&quot;;</span>
+        case NONODE:
+<span class="fc" id="L367">            return &quot;NoNode&quot;;</span>
+        case NOAUTH:
+<span class="fc" id="L369">            return &quot;NoAuth&quot;;</span>
+        case BADVERSION:
+<span class="fc" id="L371">            return &quot;BadVersion&quot;;</span>
+        case NOCHILDRENFOREPHEMERALS:
+<span class="fc" id="L373">            return &quot;NoChildrenForEphemerals&quot;;</span>
+        case NODEEXISTS:
+<span class="fc" id="L375">            return &quot;NodeExists&quot;;</span>
+        case INVALIDACL:
+<span class="fc" id="L377">            return &quot;InvalidACL&quot;;</span>
+        case AUTHFAILED:
+<span class="fc" id="L379">            return &quot;AuthFailed&quot;;</span>
+        case NOTEMPTY:
+<span class="fc" id="L381">            return &quot;Directory not empty&quot;;</span>
+        case SESSIONEXPIRED:
+<span class="fc" id="L383">            return &quot;Session expired&quot;;</span>
+        case INVALIDCALLBACK:
+<span class="fc" id="L385">            return &quot;Invalid callback&quot;;</span>
+        case SESSIONMOVED:
+<span class="fc" id="L387">            return &quot;Session moved&quot;;</span>
+        case NOTREADONLY:
+<span class="fc" id="L389">            return &quot;Not a read-only call&quot;;</span>
+        case EPHEMERALONLOCALSESSION:
+<span class="fc" id="L391">            return &quot;Ephemeral node on local session&quot;;</span>
+        case NOWATCHER:
+<span class="fc" id="L393">            return &quot;No such watcher&quot;;</span>
+        case RECONFIGDISABLED:
+<span class="fc" id="L395">            return &quot;Reconfig is disabled&quot;;</span>
+        case SESSIONCLOSEDREQUIRESASLAUTH:
+<span class="fc" id="L397">            return &quot;Session closed because client failed to authenticate&quot;;</span>
+        case QUOTAEXCEEDED:
+<span class="fc" id="L399">            return &quot;Quota has exceeded&quot;;</span>
+        case THROTTLEDOP:
+<span class="fc" id="L401">            return &quot;Op throttled due to high load&quot;;</span>
+        default:
+<span class="fc" id="L403">            return &quot;Unknown error &quot; + code;</span>
+        }
+    }
+
+    private final AtomicReference&lt;Code&gt; errorCode;
+
+    private final AtomicReference&lt;String&gt; path;
+
+    protected KeeperException(Code code) {
+<span class="fc" id="L412">        this(code, null);</span>
+<span class="fc" id="L413">    }</span>
+
+<span class="fc" id="L415">    protected KeeperException(Code code, String path) {</span>
+<span class="fc" id="L416">        this.errorCode = new AtomicReference&lt;&gt;(code);</span>
+<span class="fc" id="L417">        this.path = new AtomicReference&lt;&gt;(path);</span>
+<span class="fc" id="L418">    }</span>
+
+    /**
+     * Read the error code for this exception
+     * @return the error code for this exception
+     * @deprecated deprecated in 3.1.0, use {@link #code()} instead
+     */
+    @Deprecated
+    public int getCode() {
+<span class="fc" id="L427">        return errorCode.get().intValue();</span>
+    }
+
+    /**
+     * Read the error Code for this exception
+     * @return the error Code for this exception
+     */
+    public Code code() {
+<span class="fc" id="L435">        return errorCode.get();</span>
+    }
+
+    /**
+     * Read the path for this exception
+     * @return the path associated with this error, null if none
+     */
+    public String getPath() {
+<span class="fc" id="L443">        return path.get();</span>
+    }
+
+    @Override
+    public String getMessage() {
+<span class="fc bfc" id="L448" title="All 4 branches covered.">        if (path.get() == null || path.get().isEmpty()) {</span>
+<span class="fc" id="L449">            return &quot;KeeperErrorCode = &quot; + getCodeMessage(errorCode.get());</span>
+        }
+<span class="fc" id="L451">        return &quot;KeeperErrorCode = &quot; + getCodeMessage(errorCode.get()) + &quot; for &quot; + path.get();</span>
+    }
+
+    void setMultiResults(List&lt;OpResult&gt; results) {
+<span class="fc" id="L455">        this.results.set(results);</span>
+<span class="fc" id="L456">    }</span>
+
+    /**
+     * If this exception was thrown by a multi-request then the (partial) results
+     * and error codes can be retrieved using this getter.
+     * @return A copy of the list of results from the operations in the multi-request.
+     *
+     * @since 3.4.0
+     *
+     */
+    public List&lt;OpResult&gt; getResults() {
+<span class="fc" id="L467">        List&lt;OpResult&gt; currentResults = results.get();</span>
+<span class="fc bfc" id="L468" title="All 2 branches covered.">        return currentResults != null ? new ArrayList&lt;OpResult&gt;(currentResults) : null;</span>
+    }
+
+    /**
+     *  @see Code#APIERROR
+     */
+    @InterfaceAudience.Public
+    public static class APIErrorException extends KeeperException {
+
+        public APIErrorException() {
+<span class="fc" id="L478">            super(Code.APIERROR);</span>
+<span class="fc" id="L479">        }</span>
+
+    }
+
+    /**
+     *  @see Code#AUTHFAILED
+     */
+    @InterfaceAudience.Public
+    public static class AuthFailedException extends KeeperException {
+
+        public AuthFailedException() {
+<span class="fc" id="L490">            super(Code.AUTHFAILED);</span>
+<span class="fc" id="L491">        }</span>
+
+    }
+
+    /**
+     *  @see Code#BADARGUMENTS
+     */
+    @InterfaceAudience.Public
+    public static class BadArgumentsException extends KeeperException {
+
+        public BadArgumentsException() {
+<span class="fc" id="L502">            super(Code.BADARGUMENTS);</span>
+<span class="fc" id="L503">        }</span>
+        public BadArgumentsException(String path) {
+<span class="fc" id="L505">            super(Code.BADARGUMENTS, path);</span>
+<span class="fc" id="L506">        }</span>
+
+    }
+
+    /**
+     * @see Code#BADVERSION
+     */
+    @InterfaceAudience.Public
+    public static class BadVersionException extends KeeperException {
+
+        public BadVersionException() {
+<span class="fc" id="L517">            super(Code.BADVERSION);</span>
+<span class="fc" id="L518">        }</span>
+        public BadVersionException(String path) {
+<span class="fc" id="L520">            super(Code.BADVERSION, path);</span>
+<span class="fc" id="L521">        }</span>
+
+    }
+
+    /**
+     * @see Code#CONNECTIONLOSS
+     */
+    @InterfaceAudience.Public
+    public static class ConnectionLossException extends KeeperException {
+
+        public ConnectionLossException() {
+<span class="fc" id="L532">            super(Code.CONNECTIONLOSS);</span>
+<span class="fc" id="L533">        }</span>
+
+    }
+
+    /**
+     * @see Code#DATAINCONSISTENCY
+     */
+    @InterfaceAudience.Public
+    public static class DataInconsistencyException extends KeeperException {
+
+        public DataInconsistencyException() {
+<span class="fc" id="L544">            super(Code.DATAINCONSISTENCY);</span>
+<span class="fc" id="L545">        }</span>
+
+    }
+
+    /**
+     * @see Code#INVALIDACL
+     */
+    @InterfaceAudience.Public
+    public static class InvalidACLException extends KeeperException {
+
+        public InvalidACLException() {
+<span class="fc" id="L556">            super(Code.INVALIDACL);</span>
+<span class="fc" id="L557">        }</span>
+        public InvalidACLException(String path) {
+<span class="fc" id="L559">            super(Code.INVALIDACL, path);</span>
+<span class="fc" id="L560">        }</span>
+
+    }
+
+    /**
+     * @see Code#INVALIDCALLBACK
+     */
+    @InterfaceAudience.Public
+    public static class InvalidCallbackException extends KeeperException {
+
+        public InvalidCallbackException() {
+<span class="fc" id="L571">            super(Code.INVALIDCALLBACK);</span>
+<span class="fc" id="L572">        }</span>
+
+    }
+
+    /**
+     * @see Code#MARSHALLINGERROR
+     */
+    @InterfaceAudience.Public
+    public static class MarshallingErrorException extends KeeperException {
+
+        public MarshallingErrorException() {
+<span class="fc" id="L583">            super(Code.MARSHALLINGERROR);</span>
+<span class="fc" id="L584">        }</span>
+
+    }
+
+    /**
+     * @see Code#NOAUTH
+     */
+    @InterfaceAudience.Public
+    public static class NoAuthException extends KeeperException {
+
+        public NoAuthException() {
+<span class="fc" id="L595">            super(Code.NOAUTH);</span>
+<span class="fc" id="L596">        }</span>
+
+    }
+
+    /**
+     * @see Code#NEWCONFIGNOQUORUM
+     */
+    @InterfaceAudience.Public
+    public static class NewConfigNoQuorum extends KeeperException {
+
+        public NewConfigNoQuorum() {
+<span class="fc" id="L607">            super(Code.NEWCONFIGNOQUORUM);</span>
+<span class="fc" id="L608">        }</span>
+
+    }
+
+    /**
+     * @see Code#RECONFIGINPROGRESS
+     */
+    @InterfaceAudience.Public
+    public static class ReconfigInProgress extends KeeperException {
+
+        public ReconfigInProgress() {
+<span class="fc" id="L619">            super(Code.RECONFIGINPROGRESS);</span>
+<span class="fc" id="L620">        }</span>
+
+    }
+
+    /**
+     * @see Code#NOCHILDRENFOREPHEMERALS
+     */
+    @InterfaceAudience.Public
+    public static class NoChildrenForEphemeralsException extends KeeperException {
+
+        public NoChildrenForEphemeralsException() {
+<span class="fc" id="L631">            super(Code.NOCHILDRENFOREPHEMERALS);</span>
+<span class="fc" id="L632">        }</span>
+        public NoChildrenForEphemeralsException(String path) {
+<span class="fc" id="L634">            super(Code.NOCHILDRENFOREPHEMERALS, path);</span>
+<span class="fc" id="L635">        }</span>
+
+    }
+
+    /**
+     * @see Code#NODEEXISTS
+     */
+    @InterfaceAudience.Public
+    public static class NodeExistsException extends KeeperException {
+
+        public NodeExistsException() {
+<span class="fc" id="L646">            super(Code.NODEEXISTS);</span>
+<span class="fc" id="L647">        }</span>
+        public NodeExistsException(String path) {
+<span class="fc" id="L649">            super(Code.NODEEXISTS, path);</span>
+<span class="fc" id="L650">        }</span>
+
+    }
+
+    /**
+     * @see Code#NONODE
+     */
+    @InterfaceAudience.Public
+    public static class NoNodeException extends KeeperException {
+
+        public NoNodeException() {
+<span class="fc" id="L661">            super(Code.NONODE);</span>
+<span class="fc" id="L662">        }</span>
+        public NoNodeException(String path) {
+<span class="fc" id="L664">            super(Code.NONODE, path);</span>
+<span class="fc" id="L665">        }</span>
+
+    }
+
+    /**
+     * @see Code#NOTEMPTY
+     */
+    @InterfaceAudience.Public
+    public static class NotEmptyException extends KeeperException {
+
+        public NotEmptyException() {
+<span class="fc" id="L676">            super(Code.NOTEMPTY);</span>
+<span class="fc" id="L677">        }</span>
+        public NotEmptyException(String path) {
+<span class="fc" id="L679">            super(Code.NOTEMPTY, path);</span>
+<span class="fc" id="L680">        }</span>
+
+    }
+
+    /**
+     * @see Code#OPERATIONTIMEOUT
+     */
+    @InterfaceAudience.Public
+    public static class OperationTimeoutException extends KeeperException {
+
+        public OperationTimeoutException() {
+<span class="fc" id="L691">            super(Code.OPERATIONTIMEOUT);</span>
+<span class="fc" id="L692">        }</span>
+
+    }
+
+    /**
+     * @see Code#RUNTIMEINCONSISTENCY
+     */
+    @InterfaceAudience.Public
+    public static class RuntimeInconsistencyException extends KeeperException {
+
+        public RuntimeInconsistencyException() {
+<span class="fc" id="L703">            super(Code.RUNTIMEINCONSISTENCY);</span>
+<span class="fc" id="L704">        }</span>
+
+    }
+
+    /**
+     * @see Code#SESSIONEXPIRED
+     */
+    @InterfaceAudience.Public
+    public static class SessionExpiredException extends KeeperException {
+
+        public SessionExpiredException() {
+<span class="fc" id="L715">            super(Code.SESSIONEXPIRED);</span>
+<span class="fc" id="L716">        }</span>
+
+    }
+
+    /**
+     * @see Code#UNKNOWNSESSION
+     */
+    @InterfaceAudience.Public
+    public static class UnknownSessionException extends KeeperException {
+
+        public UnknownSessionException() {
+<span class="fc" id="L727">            super(Code.UNKNOWNSESSION);</span>
+<span class="fc" id="L728">        }</span>
+
+    }
+
+    /**
+     * @see Code#SESSIONMOVED
+     */
+    @InterfaceAudience.Public
+    public static class SessionMovedException extends KeeperException {
+
+        public SessionMovedException() {
+<span class="fc" id="L739">            super(Code.SESSIONMOVED);</span>
+<span class="fc" id="L740">        }</span>
+
+    }
+
+    /**
+     * @see Code#NOTREADONLY
+     */
+    @InterfaceAudience.Public
+    public static class NotReadOnlyException extends KeeperException {
+
+        public NotReadOnlyException() {
+<span class="fc" id="L751">            super(Code.NOTREADONLY);</span>
+<span class="fc" id="L752">        }</span>
+
+    }
+
+    /**
+     * @see Code#EPHEMERALONLOCALSESSION
+     */
+    @InterfaceAudience.Public
+    public static class EphemeralOnLocalSessionException extends KeeperException {
+
+        public EphemeralOnLocalSessionException() {
+<span class="fc" id="L763">            super(Code.EPHEMERALONLOCALSESSION);</span>
+<span class="fc" id="L764">        }</span>
+
+    }
+
+    /**
+     * @see Code#SYSTEMERROR
+     */
+    @InterfaceAudience.Public
+    public static class SystemErrorException extends KeeperException {
+
+        public SystemErrorException() {
+<span class="fc" id="L775">            super(Code.SYSTEMERROR);</span>
+<span class="fc" id="L776">        }</span>
+
+    }
+
+    /**
+     * @see Code#UNIMPLEMENTED
+     */
+    @InterfaceAudience.Public
+    public static class UnimplementedException extends KeeperException {
+
+        public UnimplementedException() {
+<span class="fc" id="L787">            super(Code.UNIMPLEMENTED);</span>
+<span class="fc" id="L788">        }</span>
+
+    }
+
+    /**
+     * @see Code#NOWATCHER
+     */
+    @InterfaceAudience.Public
+    public static class NoWatcherException extends KeeperException {
+
+        public NoWatcherException() {
+<span class="fc" id="L799">            super(Code.NOWATCHER);</span>
+<span class="fc" id="L800">        }</span>
+
+        public NoWatcherException(String path) {
+<span class="fc" id="L803">            super(Code.NOWATCHER, path);</span>
+<span class="fc" id="L804">        }</span>
+
+    }
+
+    /**
+     * @see Code#RECONFIGDISABLED
+     */
+    @InterfaceAudience.Public
+    public static class ReconfigDisabledException extends KeeperException {
+
+        public ReconfigDisabledException() {
+<span class="fc" id="L815">            super(Code.RECONFIGDISABLED);</span>
+<span class="fc" id="L816">        }</span>
+        public ReconfigDisabledException(String path) {
+<span class="fc" id="L818">            super(Code.RECONFIGDISABLED, path);</span>
+<span class="fc" id="L819">        }</span>
+
+    }
+
+    /**
+     * @see Code#SESSIONCLOSEDREQUIRESASLAUTH
+     */
+    public static class SessionClosedRequireAuthException extends KeeperException {
+
+        public SessionClosedRequireAuthException() {
+<span class="fc" id="L829">            super(Code.SESSIONCLOSEDREQUIRESASLAUTH);</span>
+<span class="fc" id="L830">        }</span>
+        public SessionClosedRequireAuthException(String path) {
+<span class="fc" id="L832">            super(Code.SESSIONCLOSEDREQUIRESASLAUTH, path);</span>
+<span class="fc" id="L833">        }</span>
+
+    }
+
+    /**
+     * @see Code#REQUESTTIMEOUT
+     */
+    public static class RequestTimeoutException extends KeeperException {
+
+        public RequestTimeoutException() {
+<span class="fc" id="L843">            super(Code.REQUESTTIMEOUT);</span>
+<span class="fc" id="L844">        }</span>
+
+    }
+
+    /**
+     * @see Code#QUOTAEXCEEDED
+     */
+    @InterfaceAudience.Public
+    public static class QuotaExceededException extends KeeperException {
+        public QuotaExceededException() {
+<span class="fc" id="L854">            super(Code.QUOTAEXCEEDED);</span>
+<span class="fc" id="L855">        }</span>
+        public QuotaExceededException(String path) {
+<span class="fc" id="L857">            super(Code.QUOTAEXCEEDED, path);</span>
+<span class="fc" id="L858">        }</span>
+    }
+
+    /**
+     * @see Code#THROTTLEDOP
+     */
+    public static class ThrottledOpException extends KeeperException {
+        public ThrottledOpException() {
+<span class="fc" id="L866">            super(Code.THROTTLEDOP);</span>
+<span class="fc" id="L867">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

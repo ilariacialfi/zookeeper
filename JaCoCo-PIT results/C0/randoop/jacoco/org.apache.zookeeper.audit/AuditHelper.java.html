@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AuditHelper.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.audit</a> &gt; <span class="el_source">AuditHelper.java</span></div><h1>AuditHelper.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.zookeeper.audit;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import org.apache.zookeeper.CreateMode;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.MultiOperationRecord;
+import org.apache.zookeeper.Op;
+import org.apache.zookeeper.ZKUtil;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.audit.AuditEvent.Result;
+import org.apache.zookeeper.proto.CreateRequest;
+import org.apache.zookeeper.proto.CreateTTLRequest;
+import org.apache.zookeeper.proto.DeleteRequest;
+import org.apache.zookeeper.proto.SetACLRequest;
+import org.apache.zookeeper.proto.SetDataRequest;
+import org.apache.zookeeper.server.DataTree.ProcessTxnResult;
+import org.apache.zookeeper.server.Request;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Helper class to decouple audit log code.
+ */
+<span class="nc" id="L43">public final class AuditHelper {</span>
+<span class="nc" id="L44">    private static final Logger LOG = LoggerFactory.getLogger(AuditHelper.class);</span>
+
+    public static void addAuditLog(Request request, ProcessTxnResult rc) {
+<span class="nc" id="L47">        addAuditLog(request, rc, false);</span>
+<span class="nc" id="L48">    }</span>
+
+    /**
+     * Add audit log if audit log is enabled and operation is of type which to be audit logged.
+     *
+     * @param request   user request
+     * @param txnResult ProcessTxnResult
+     * @param failedTxn whether audit is being done failed transaction for normal transaction
+     */
+    public static void addAuditLog(Request request, ProcessTxnResult txnResult, boolean failedTxn) {
+<span class="nc bnc" id="L58" title="All 2 branches missed.">        if (!ZKAuditProvider.isAuditEnabled()) {</span>
+<span class="nc" id="L59">            return;</span>
+        }
+        String op;
+        //For failed transaction rc.path is null
+<span class="nc" id="L63">        String path = txnResult.path;</span>
+<span class="nc" id="L64">        String acls = null;</span>
+<span class="nc" id="L65">        String createMode = null;</span>
+        try {
+<span class="nc bnc" id="L67" title="All 8 branches missed.">            switch (request.type) {</span>
+                case ZooDefs.OpCode.create:
+                case ZooDefs.OpCode.create2:
+                case ZooDefs.OpCode.createContainer:
+<span class="nc" id="L71">                    op = AuditConstants.OP_CREATE;</span>
+<span class="nc" id="L72">                    CreateRequest createRequest = request.readRequestRecord(CreateRequest::new);</span>
+<span class="nc" id="L73">                    createMode = getCreateMode(createRequest.getFlags());</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">                    if (failedTxn) {</span>
+<span class="nc" id="L75">                        path = createRequest.getPath();</span>
+                    }
+                    break;
+                case ZooDefs.OpCode.createTTL:
+<span class="nc" id="L79">                    op = AuditConstants.OP_CREATE;</span>
+<span class="nc" id="L80">                    CreateTTLRequest createTtlRequest = request.readRequestRecord(CreateTTLRequest::new);</span>
+<span class="nc" id="L81">                    createMode = getCreateMode(createTtlRequest.getFlags());</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">                    if (failedTxn) {</span>
+<span class="nc" id="L83">                        path = createTtlRequest.getPath();</span>
+                    }
+                    break;
+                case ZooDefs.OpCode.delete:
+                case ZooDefs.OpCode.deleteContainer:
+<span class="nc" id="L88">                    op = AuditConstants.OP_DELETE;</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">                    if (failedTxn) {</span>
+<span class="nc" id="L90">                        DeleteRequest deleteRequest = request.readRequestRecord(DeleteRequest::new);</span>
+<span class="nc" id="L91">                        path = deleteRequest.getPath();</span>
+<span class="nc" id="L92">                    }</span>
+                    break;
+                case ZooDefs.OpCode.setData:
+<span class="nc" id="L95">                    op = AuditConstants.OP_SETDATA;</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">                    if (failedTxn) {</span>
+<span class="nc" id="L97">                        SetDataRequest setDataRequest = request.readRequestRecord(SetDataRequest::new);</span>
+<span class="nc" id="L98">                        path = setDataRequest.getPath();</span>
+<span class="nc" id="L99">                    }</span>
+                    break;
+                case ZooDefs.OpCode.setACL:
+<span class="nc" id="L102">                    op = AuditConstants.OP_SETACL;</span>
+<span class="nc" id="L103">                    SetACLRequest setACLRequest = request.readRequestRecord(SetACLRequest::new);</span>
+<span class="nc" id="L104">                    acls = ZKUtil.aclToString(setACLRequest.getAcl());</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                    if (failedTxn) {</span>
+<span class="nc" id="L106">                        path = setACLRequest.getPath();</span>
+                    }
+                    break;
+                case ZooDefs.OpCode.multi:
+<span class="nc bnc" id="L110" title="All 2 branches missed.">                    if (failedTxn) {</span>
+<span class="nc" id="L111">                        op = AuditConstants.OP_MULTI_OP;</span>
+                    } else {
+<span class="nc" id="L113">                        logMultiOperation(request, txnResult);</span>
+                        //operation si already logged
+<span class="nc" id="L115">                        return;</span>
+                    }
+                    break;
+                case ZooDefs.OpCode.reconfig:
+<span class="nc" id="L119">                    op = AuditConstants.OP_RECONFIG;</span>
+<span class="nc" id="L120">                    break;</span>
+                default:
+                    //Not an audit log operation
+<span class="nc" id="L123">                    return;</span>
+            }
+<span class="nc" id="L125">            Result result = getResult(txnResult, failedTxn);</span>
+<span class="nc" id="L126">            log(request, path, op, acls, createMode, result);</span>
+<span class="nc" id="L127">        } catch (Throwable e) {</span>
+<span class="nc" id="L128">            LOG.error(&quot;Failed to audit log request {}&quot;, request.type, e);</span>
+<span class="nc" id="L129">        }</span>
+<span class="nc" id="L130">    }</span>
+
+    private static Result getResult(ProcessTxnResult rc, boolean failedTxn) {
+<span class="nc bnc" id="L133" title="All 2 branches missed.">        if (failedTxn) {</span>
+<span class="nc" id="L134">            return Result.FAILURE;</span>
+        } else {
+<span class="nc bnc" id="L136" title="All 2 branches missed.">            return rc.err == KeeperException.Code.OK.intValue() ? Result.SUCCESS : Result.FAILURE;</span>
+        }
+    }
+
+    private static void logMultiOperation(Request request, ProcessTxnResult rc) throws IOException, KeeperException {
+<span class="nc" id="L141">        Map&lt;String, String&gt; createModes = AuditHelper.getCreateModes(request);</span>
+<span class="nc" id="L142">        boolean multiFailed = false;</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        for (ProcessTxnResult subTxnResult : rc.multiResult) {</span>
+<span class="nc bnc" id="L144" title="All 5 branches missed.">            switch (subTxnResult.type) {</span>
+                case ZooDefs.OpCode.create:
+                case ZooDefs.OpCode.create2:
+                case ZooDefs.OpCode.createTTL:
+                case ZooDefs.OpCode.createContainer:
+<span class="nc" id="L149">                    log(request, subTxnResult.path, AuditConstants.OP_CREATE, null,</span>
+<span class="nc" id="L150">                            createModes.get(subTxnResult.path), Result.SUCCESS);</span>
+<span class="nc" id="L151">                    break;</span>
+                case ZooDefs.OpCode.delete:
+                case ZooDefs.OpCode.deleteContainer:
+<span class="nc" id="L154">                    log(request, subTxnResult.path, AuditConstants.OP_DELETE, null,</span>
+                            null, Result.SUCCESS);
+<span class="nc" id="L156">                    break;</span>
+                case ZooDefs.OpCode.setData:
+<span class="nc" id="L158">                    log(request, subTxnResult.path, AuditConstants.OP_SETDATA, null,</span>
+                            null, Result.SUCCESS);
+<span class="nc" id="L160">                    break;</span>
+                case ZooDefs.OpCode.error:
+<span class="nc" id="L162">                    multiFailed = true;</span>
+<span class="nc" id="L163">                    break;</span>
+                default:
+                    // Do nothing, it ok, we do not log all multi operations
+            }
+<span class="nc" id="L167">        }</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">        if (multiFailed) {</span>
+<span class="nc" id="L169">            log(request, rc.path, AuditConstants.OP_MULTI_OP, null,</span>
+                    null, Result.FAILURE);
+        }
+<span class="nc" id="L172">    }</span>
+
+    private static void log(Request request, String path, String op, String acls, String createMode, Result result) {
+<span class="nc" id="L175">        log(request.getUsersForAudit(), op, path, acls, createMode,</span>
+<span class="nc" id="L176">                request.cnxn.getSessionIdHex(), request.cnxn.getHostAddress(), result);</span>
+<span class="nc" id="L177">    }</span>
+
+    private static void log(String user, String operation, String znode, String acl,
+                            String createMode, String session, String ip, Result result) {
+<span class="nc" id="L181">        ZKAuditProvider.log(user, operation, znode, acl, createMode, session, ip, result);</span>
+<span class="nc" id="L182">    }</span>
+
+    private static String getCreateMode(int createFlags) throws KeeperException {
+<span class="nc" id="L185">        return CreateMode.fromFlag(createFlags).toString().toLowerCase();</span>
+    }
+
+    private static Map&lt;String, String&gt; getCreateModes(Request request)
+            throws IOException, KeeperException {
+<span class="nc" id="L190">        Map&lt;String, String&gt; createModes = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">        if (!ZKAuditProvider.isAuditEnabled()) {</span>
+<span class="nc" id="L192">            return createModes;</span>
+        }
+<span class="nc" id="L194">        MultiOperationRecord multiRequest = request.readRequestRecord(MultiOperationRecord::new);</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">        for (Op op : multiRequest) {</span>
+<span class="nc bnc" id="L196" title="All 4 branches missed.">            if (op.getType() == ZooDefs.OpCode.create || op.getType() == ZooDefs.OpCode.create2</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">                    || op.getType() == ZooDefs.OpCode.createContainer) {</span>
+<span class="nc" id="L198">                CreateRequest requestRecord = (CreateRequest) op.toRequestRecord();</span>
+<span class="nc" id="L199">                createModes.put(requestRecord.getPath(),</span>
+<span class="nc" id="L200">                        getCreateMode(requestRecord.getFlags()));</span>
+            }
+<span class="nc" id="L202">        }</span>
+<span class="nc" id="L203">        return createModes;</span>
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

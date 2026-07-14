@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StaticHostProvider.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.client</a> &gt; <span class="el_source">StaticHostProvider.java</span></div><h1>StaticHostProvider.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.client;
+
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
+import java.util.Collection;
+import org.apache.yetus.audience.InterfaceAudience;
+
+/**
+ * Most simple HostProvider, resolves on every next() call.
+ *
+ * Please be aware that although this class doesn't do any DNS caching, there're multiple levels of caching already
+ * present across the stack like in JVM, OS level, hardware, etc. The best we could do here is to get the most recent
+ * address from the underlying system which is considered up-to-date.
+ *
+ * It uses HostConnectionManager for all connection management and reconfiguration logic.
+ */
+@InterfaceAudience.Public
+public final class StaticHostProvider implements HostProvider {
+
+    public interface Resolver {
+
+        InetAddress[] getAllByName(String name) throws UnknownHostException;
+
+    }
+
+    private final HostConnectionManager connectionManager;
+
+    /**
+     * Constructs a SimpleHostSet.
+     *
+     * @param serverAddresses
+     *            possibly unresolved ZooKeeper server addresses
+     * @throws IllegalArgumentException
+     *             if serverAddresses is empty or resolves to an empty list
+     */
+<span class="nc" id="L55">    public StaticHostProvider(Collection&lt;InetSocketAddress&gt; serverAddresses) {</span>
+<span class="nc" id="L56">        connectionManager = new HostConnectionManager(serverAddresses, System.currentTimeMillis() ^ this.hashCode(), null);</span>
+<span class="nc" id="L57">    }</span>
+
+    /**
+     * Constructs a SimpleHostSet with ZKClientConfig.
+     *
+     * Introduced this new overload in 3.10.0 in order to take advantage of some newly introduced feature flags. Like
+     * the shuffle (old) / not to shuffle (new) behavior of DNS resolution.
+     *
+     * @param serverAddresses
+     *            possibly unresolved ZooKeeper server addresses
+     * @param clientConfig
+     *            ZooKeeper client configuration
+     */
+<span class="nc" id="L70">    public StaticHostProvider(Collection&lt;InetSocketAddress&gt; serverAddresses, ZKClientConfig clientConfig) {</span>
+<span class="nc" id="L71">        connectionManager = new HostConnectionManager(serverAddresses,</span>
+<span class="nc" id="L72">                                                        System.currentTimeMillis() ^ this.hashCode(),</span>
+                                                        null,
+                                                        clientConfig);
+<span class="nc" id="L75">    }</span>
+
+    /**
+     * Constructs a SimpleHostSet.
+     *
+     * Introduced for testing purposes. getAllByName() is a static method of InetAddress, therefore cannot be easily mocked.
+     * By abstraction of Resolver interface we can easily inject a mocked implementation in tests.
+     *
+     * @param serverAddresses
+     *              possibly unresolved ZooKeeper server addresses
+     * @param resolver
+     *              custom resolver implementation
+     */
+<span class="nc" id="L88">    public StaticHostProvider(Collection&lt;InetSocketAddress&gt; serverAddresses, Resolver resolver) {</span>
+<span class="nc" id="L89">        this.connectionManager = new HostConnectionManager(serverAddresses,</span>
+<span class="nc" id="L90">                                                    System.currentTimeMillis() ^ this.hashCode(),</span>
+<span class="nc" id="L91">                                                    resolver::getAllByName,</span>
+                                                    null);
+<span class="nc" id="L93">    }</span>
+
+    /**
+     * Constructs a SimpleHostSet. This constructor is used from StaticHostProviderTest to produce deterministic test results
+     * by initializing sourceOfRandomness with the same seed
+     *
+     * @param serverAddresses
+     *            possibly unresolved ZooKeeper server addresses
+     * @param randomnessSeed a seed used to initialize sourceOfRandomness
+     * @throws IllegalArgumentException
+     *             if serverAddresses is empty or resolves to an empty list
+     */
+<span class="nc" id="L105">    public StaticHostProvider(Collection&lt;InetSocketAddress&gt; serverAddresses, long randomnessSeed) {</span>
+<span class="nc" id="L106">        this.connectionManager = new HostConnectionManager(serverAddresses,</span>
+                                                            randomnessSeed,
+                                                            null,
+                                                            null);
+<span class="nc" id="L110">    }</span>
+
+    @Override
+    public boolean updateServerList(Collection&lt;InetSocketAddress&gt; serverAddresses, InetSocketAddress currentHost) {
+<span class="nc" id="L114">        return connectionManager.updateServerList(serverAddresses, currentHost);</span>
+    }
+
+    @Override
+    public int size() {
+<span class="nc" id="L119">        return connectionManager.size();</span>
+    }
+
+    @Override
+    public InetSocketAddress next(long spinDelay) {
+<span class="nc" id="L124">        return connectionManager.next(spinDelay);</span>
+    }
+
+    @Override
+    public void onConnected() {
+<span class="nc" id="L129">        connectionManager.onConnected();</span>
+<span class="nc" id="L130">    }</span>
+
+    public InetSocketAddress getServerAtIndex(int i) {
+<span class="nc" id="L133">        return connectionManager.getServerAtIndex(i);</span>
+    }
+
+    public InetSocketAddress getServerAtCurrentIndex() {
+<span class="nc" id="L137">        return connectionManager.getServerAtCurrentIndex();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

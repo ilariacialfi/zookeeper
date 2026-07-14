@@ -1,0 +1,996 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper;
+
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import org.apache.yetus.audience.InterfaceAudience;
+
+@InterfaceAudience.Public
+public abstract class KeeperException extends Exception {
+
+    /**
+     * All multi-requests that result in an exception retain the results
+     * here so that it is possible to examine the problems in the catch
+     * scope.  Non-multi requests will get a null if they try to access
+     * these results.
+     */
+    private final ValueHolder<List<OpResult>> results = new ValueHolder<>();
+
+    /**
+     * All non-specific keeper exceptions should be constructed via
+     * this factory method in order to guarantee consistency in error
+     * codes and such.  If you know the error code, then you should
+     * construct the special purpose exception directly.  That will
+     * allow you to have the most specific possible declarations of
+     * what exceptions might actually be thrown.
+     *
+     * @param code The error code.
+     * @param path The ZooKeeper path being operated on.
+     * @return The specialized exception, presumably to be thrown by
+     *  the caller.
+     */
+    public static KeeperException create(Code code, String path) {
+        KeeperException r = create(code);
+        r.path.value = path;
+        return r;
+    }
+
+    /**
+     * @deprecated deprecated in 3.1.0, use {@link #create(Code, String)}
+     * instead
+     */
+    @SuppressWarnings("java:S1133")
+    @Deprecated
+    public static KeeperException create(int code, String path) {
+        KeeperException r = create(Code.get(code));
+        r.path.value = path;
+        return r;
+    }
+
+    /**
+     * @deprecated deprecated in 3.1.0, use {@link #create(Code)}
+     * instead
+     */
+    @SuppressWarnings("java:S1133")
+    @Deprecated
+    public static KeeperException create(int code) {
+        return create(Code.get(code));
+    }
+
+    /**
+     * All non-specific keeper exceptions should be constructed via
+     * this factory method in order to guarantee consistency in error
+     * codes and such.  If you know the error code, then you should
+     * construct the special purpose exception directly.  That will
+     * allow you to have the most specific possible declarations of
+     * what exceptions might actually be thrown.
+     *
+     * @param code The error code of your new exception.  This will
+     * also determine the specific type of the exception that is
+     * returned.
+     * @return The specialized exception, presumably to be thrown by
+     * the caller.
+     */
+    public static KeeperException create(Code code) {
+        switch (code) {
+        case SYSTEMERROR:
+            return new SystemErrorException();
+        case RUNTIMEINCONSISTENCY:
+            return new RuntimeInconsistencyException();
+        case DATAINCONSISTENCY:
+            return new DataInconsistencyException();
+        case CONNECTIONLOSS:
+            return new ConnectionLossException();
+        case MARSHALLINGERROR:
+            return new MarshallingErrorException();
+        case UNIMPLEMENTED:
+            return new UnimplementedException();
+        case OPERATIONTIMEOUT:
+            return new OperationTimeoutException();
+        case NEWCONFIGNOQUORUM:
+            return new NewConfigNoQuorum();
+        case RECONFIGINPROGRESS:
+            return new ReconfigInProgress();
+        case BADARGUMENTS:
+            return new BadArgumentsException();
+        case APIERROR:
+            return new APIErrorException();
+        case NONODE:
+            return new NoNodeException();
+        case NOAUTH:
+            return new NoAuthException();
+        case BADVERSION:
+            return new BadVersionException();
+        case NOCHILDRENFOREPHEMERALS:
+            return new NoChildrenForEphemeralsException();
+        case NODEEXISTS:
+            return new NodeExistsException();
+        case INVALIDACL:
+            return new InvalidACLException();
+        case AUTHFAILED:
+            return new AuthFailedException();
+        case NOTEMPTY:
+            return new NotEmptyException();
+        case SESSIONEXPIRED:
+            return new SessionExpiredException();
+        case INVALIDCALLBACK:
+            return new InvalidCallbackException();
+        case SESSIONMOVED:
+            return new SessionMovedException();
+        case NOTREADONLY:
+            return new NotReadOnlyException();
+        case EPHEMERALONLOCALSESSION:
+            return new EphemeralOnLocalSessionException();
+        case NOWATCHER:
+            return new NoWatcherException();
+        case RECONFIGDISABLED:
+            return new ReconfigDisabledException();
+        case SESSIONCLOSEDREQUIRESASLAUTH:
+            return new SessionClosedRequireAuthException();
+        case REQUESTTIMEOUT:
+            return new RequestTimeoutException();
+        case QUOTAEXCEEDED:
+            return new QuotaExceededException();
+        case THROTTLEDOP:
+            return new ThrottledOpException();
+        case OK:
+        default:
+            throw new IllegalArgumentException("Invalid exception code:" + code.code);
+        }
+    }
+
+    /**
+     * Set the code for this exception
+     * @param code error code
+     * @deprecated deprecated in 3.1.0, exceptions should be immutable, this
+     * method should not be used
+     */
+    @SuppressWarnings("java:S1133")
+    @Deprecated
+    public void setCode(int code) {
+        this.errorCode.value = Code.get(code);
+    }
+
+    /** This interface contains the original static final int constants
+     * which have now been replaced with an enumeration in Code. Do not
+     * reference this class directly, if necessary (legacy code) continue
+     * to access the constants through Code.
+     * Note: an interface is used here due to the fact that enums cannot
+     * reference constants defined within the same enum as said constants
+     * are considered initialized _after_ the enum itself. By using an
+     * interface as a super type this allows the deprecated constants to
+     * be initialized first and referenced when constructing the enums. I
+     * didn't want to have constants declared twice. This
+     * interface should be private, but it's declared public to enable
+     * javadoc to include in the user API spec.
+     */
+    @SuppressWarnings({"DeprecatedIsStillUsed", "java:S1133"})
+    @Deprecated
+    @InterfaceAudience.Public
+    public static final class CodeDeprecated {
+
+        private CodeDeprecated() {
+        }
+
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#OK} instead
+         */
+        @Deprecated
+        public static final int OK = 0;
+
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#SYSTEMERROR} instead
+         */
+        @Deprecated
+        public static final int SYSTEM_ERROR = -1;
+        /**
+         * @deprecated deprecated in 3.1.0, use
+         * {@link Code#RUNTIMEINCONSISTENCY} instead
+         */
+        @Deprecated
+        public static final int RUNTIME_INCONSISTENCY = -2;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#DATAINCONSISTENCY}
+         * instead
+         */
+        @Deprecated
+        public static final int DATA_INCONSISTENCY = -3;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#CONNECTIONLOSS}
+         * instead
+         */
+        @Deprecated
+        public static final int CONNECTION_LOSS = -4;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#MARSHALLINGERROR}
+         * instead
+         */
+        @Deprecated
+        public static final int MARSHALLING_ERROR = -5;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#UNIMPLEMENTED}
+         * instead
+         */
+        @Deprecated
+        public static final int UNIMPLEMENTED = -6;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#OPERATIONTIMEOUT}
+         * instead
+         */
+        @Deprecated
+        public static final int OPERATION_TIMEOUT = -7;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#BADARGUMENTS}
+         * instead
+         */
+        @Deprecated
+        public static final int BAD_ARGUMENTS = -8;
+
+        /**
+         * @deprecated deprecated in 3.1.0; retained for compatibility
+         */
+        @Deprecated
+        public static final int UNKNOWN_SESSION = -12;
+
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#NEWCONFIGNOQUORUM}
+         * instead
+         */
+        @Deprecated
+        public static final int NEW_CONFIG_NO_QUORUM = -13;
+
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#RECONFIGINPROGRESS}
+         * instead
+         */
+        @Deprecated
+        public static final int RECONFIG_IN_PROGRESS = -14;
+
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#APIERROR} instead
+         */
+        @Deprecated
+        public static final int API_ERROR = -100;
+
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#NONODE} instead
+         */
+        @Deprecated
+        public static final int NO_NODE = -101;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#NOAUTH} instead
+         */
+        @Deprecated
+        public static final int NO_AUTH = -102;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#BADVERSION} instead
+         */
+        @Deprecated
+        public static final int BAD_VERSION = -103;
+        /**
+         * @deprecated deprecated in 3.1.0, use
+         * {@link Code#NOCHILDRENFOREPHEMERALS}
+         * instead
+         */
+        @Deprecated
+        public static final int NO_CHILDREN_FOR_EPHEMERALS = -108;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#NODEEXISTS} instead
+         */
+        @Deprecated
+        public static final int NODE_EXISTS = -110;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#NOTEMPTY} instead
+         */
+        @Deprecated
+        public static final int NOT_EMPTY = -111;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#SESSIONEXPIRED} instead
+         */
+        @Deprecated
+        public static final int SESSION_EXPIRED = -112;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#INVALIDCALLBACK}
+         * instead
+         */
+        @Deprecated
+        public static final int INVALID_CALLBACK = -113;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#INVALIDACL} instead
+         */
+        @Deprecated
+        public static final int INVALID_ACL = -114;
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#AUTHFAILED} instead
+         */
+        @Deprecated
+        public static final int AUTH_FAILED = -115;
+
+        /**
+         * @deprecated deprecated in 3.1.0, use {@link Code#EPHEMERALONLOCALSESSION} instead
+         */
+        @Deprecated
+        public static final int EPHEMERAL_ON_LOCAL_SESSION = -120;
+
+    }
+
+    /** Codes which represent the various KeeperException
+     * types. This enum replaces the deprecated earlier static final int
+     * constants. The old, deprecated, values are in "camel case" while the new
+     * enum values are in all CAPS.
+     */
+    @InterfaceAudience.Public
+    public enum Code {
+        /** Everything is OK */
+        OK(CodeDeprecated.OK),
+
+        /** System and server-side errors.
+         * This is never thrown by the server, it shouldn't be used other than
+         * to indicate a range. Specifically error codes greater than this
+         * value, but lesser than {@link #APIERROR}, are system errors.
+         */
+        SYSTEMERROR(CodeDeprecated.SYSTEM_ERROR),
+
+        /** A runtime inconsistency was found */
+        RUNTIMEINCONSISTENCY(CodeDeprecated.RUNTIME_INCONSISTENCY),
+        /** A data inconsistency was found */
+        DATAINCONSISTENCY(CodeDeprecated.DATA_INCONSISTENCY),
+        /** Connection to the server has been lost */
+        CONNECTIONLOSS(CodeDeprecated.CONNECTION_LOSS),
+        /** Error while marshalling or unmarshalling data */
+        MARSHALLINGERROR(CodeDeprecated.MARSHALLING_ERROR),
+        /** Operation is unimplemented */
+        UNIMPLEMENTED(CodeDeprecated.UNIMPLEMENTED),
+        /** Operation timeout */
+        OPERATIONTIMEOUT(CodeDeprecated.OPERATION_TIMEOUT),
+        /** Invalid arguments */
+        BADARGUMENTS(CodeDeprecated.BAD_ARGUMENTS),
+        /** No quorum of new config is connected and up-to-date with the leader of last committed config - try
+         *  invoking reconfiguration after new servers are connected and synced */
+        NEWCONFIGNOQUORUM(CodeDeprecated.NEW_CONFIG_NO_QUORUM),
+        /** Another reconfiguration is in progress -- concurrent reconfigs not supported (yet) */
+        RECONFIGINPROGRESS(CodeDeprecated.RECONFIG_IN_PROGRESS),
+        /** Unknown session (internal server use only) */
+        UNKNOWNSESSION(CodeDeprecated.UNKNOWN_SESSION),
+
+        /** API errors.
+         * This is never thrown by the server, it shouldn't be used other than
+         * to indicate a range. Specifically error codes greater than this
+         * value are API errors (while values less than this indicate a
+         * {@link #SYSTEMERROR}).
+         */
+        APIERROR(CodeDeprecated.API_ERROR),
+
+        /** Node does not exist */
+        NONODE(CodeDeprecated.NO_NODE),
+        /** Not authenticated */
+        NOAUTH(CodeDeprecated.NO_AUTH),
+        /** Version conflict
+         In case of reconfiguration: reconfig requested from config version X but last seen config has a different version Y */
+        BADVERSION(CodeDeprecated.BAD_VERSION),
+        /** Ephemeral nodes may not have children */
+        NOCHILDRENFOREPHEMERALS(CodeDeprecated.NO_CHILDREN_FOR_EPHEMERALS),
+        /** The node already exists */
+        NODEEXISTS(CodeDeprecated.NODE_EXISTS),
+        /** The node has children */
+        NOTEMPTY(CodeDeprecated.NOT_EMPTY),
+        /** The session has been expired by the server */
+        SESSIONEXPIRED(CodeDeprecated.SESSION_EXPIRED),
+        /** Invalid callback specified */
+        INVALIDCALLBACK(CodeDeprecated.INVALID_CALLBACK),
+        /** Invalid ACL specified */
+        INVALIDACL(CodeDeprecated.INVALID_ACL),
+        /** Client authentication failed */
+        AUTHFAILED(CodeDeprecated.AUTH_FAILED),
+        /** Session moved to another server, so operation is ignored */
+        SESSIONMOVED(-118),
+        /** State-changing request is passed to read-only server */
+        NOTREADONLY(-119),
+        /** Attempt to create ephemeral node on a local session */
+        EPHEMERALONLOCALSESSION(CodeDeprecated.EPHEMERAL_ON_LOCAL_SESSION),
+        /** Attempts to remove a non-existing watcher */
+        NOWATCHER(-121),
+        /** Request not completed within max allowed time.*/
+        REQUESTTIMEOUT(-122),
+        /** Attempts to perform a reconfiguration operation when reconfiguration feature is disabled. */
+        RECONFIGDISABLED(-123),
+        /** The session has been closed by server because server requires client to do authentication
+         *  with configured authentication scheme at the server, but client is not configured with
+         *  required  authentication scheme or configured but authentication failed
+         *  (i.e. wrong credential used.). */
+        SESSIONCLOSEDREQUIRESASLAUTH(-124),
+        /** Exceeded the quota that was set on the path.*/
+        QUOTAEXCEEDED(-125),
+        /** Operation was throttled and not executed at all. This error code indicates that zookeeper server
+         *  is under heavy load and can't process incoming requests at full speed; please retry with back off.
+         */
+        THROTTLEDOP (-127);
+
+        private static final Map<Integer, Code> lookup = new HashMap<>();
+
+        static {
+            for (Code c : EnumSet.allOf(Code.class)) {
+                lookup.put(c.code, c);
+            }
+        }
+
+        private final int code;
+        Code(int code) {
+            this.code = code;
+        }
+
+        /**
+         * Get the int value for a particular Code.
+         * @return error code as integer
+         */
+        public int intValue() {
+            return code;
+        }
+
+        /**
+         * Get the Code value for a particular integer error code
+         * @param code int error code
+         * @return Code value corresponding to specified int code, if null throws IllegalArgumentException
+         */
+        public static Code get(int code) {
+            Code codeVal = lookup.get(code);
+            if (codeVal == null) {
+                throw new IllegalArgumentException("The current client version cannot lookup this code:" + code);
+            }
+            return codeVal;
+        }
+    }
+
+    static String getCodeMessage(Code code) {
+        switch (code) {
+        case OK:
+            return "ok";
+        case SYSTEMERROR:
+            return "SystemError";
+        case RUNTIMEINCONSISTENCY:
+            return "RuntimeInconsistency";
+        case DATAINCONSISTENCY:
+            return "DataInconsistency";
+        case CONNECTIONLOSS:
+            return "ConnectionLoss";
+        case MARSHALLINGERROR:
+            return "MarshallingError";
+        case NEWCONFIGNOQUORUM:
+            return "NewConfigNoQuorum";
+        case RECONFIGINPROGRESS:
+            return "ReconfigInProgress";
+        case UNIMPLEMENTED:
+            return "Unimplemented";
+        case OPERATIONTIMEOUT:
+            return "OperationTimeout";
+        case BADARGUMENTS:
+            return "BadArguments";
+        case APIERROR:
+            return "APIError";
+        case NONODE:
+            return "NoNode";
+        case NOAUTH:
+            return "NoAuth";
+        case BADVERSION:
+            return "BadVersion";
+        case NOCHILDRENFOREPHEMERALS:
+            return "NoChildrenForEphemerals";
+        case NODEEXISTS:
+            return "NodeExists";
+        case INVALIDACL:
+            return "InvalidACL";
+        case AUTHFAILED:
+            return "AuthFailed";
+        case NOTEMPTY:
+            return "Directory not empty";
+        case SESSIONEXPIRED:
+            return "Session expired";
+        case INVALIDCALLBACK:
+            return "Invalid callback";
+        case SESSIONMOVED:
+            return "Session moved";
+        case NOTREADONLY:
+            return "Not a read-only call";
+        case EPHEMERALONLOCALSESSION:
+            return "Ephemeral node on local session";
+        case NOWATCHER:
+            return "No such watcher";
+        case RECONFIGDISABLED:
+            return "Reconfig is disabled";
+        case SESSIONCLOSEDREQUIRESASLAUTH:
+            return "Session closed because client failed to authenticate";
+        case QUOTAEXCEEDED:
+            return "Quota has exceeded";
+        case THROTTLEDOP:
+            return "Op throttled due to high load";
+        default:
+            return "Unknown error " + code;
+        }
+    }
+
+    private static final class ValueHolder<T> {
+        private T value;
+    }
+
+    private final ValueHolder<Code> errorCode = new ValueHolder<>();
+
+    private final ValueHolder<String> path = new ValueHolder<>();
+
+    protected KeeperException(Code code) {
+        this.errorCode.value = code;
+    }
+
+    KeeperException(Code code, String path) {
+        this.errorCode.value = code;
+        this.path.value = path;
+    }
+
+    /**
+     * Read the error code for this exception
+     * @return the error code for this exception
+     * @deprecated deprecated in 3.1.0, use {@link #code()} instead
+     */
+    @Deprecated
+    public int getCode() {
+        return errorCode.value.code;
+    }
+
+    /**
+     * Read the error Code for this exception
+     * @return the error Code for this exception
+     */
+    public Code code() {
+        return errorCode.value;
+    }
+
+    /**
+     * Read the path for this exception
+     * @return the path associated with this error, null if none
+     */
+    public String getPath() {
+        return path.value;
+    }
+
+    @Override
+    public String getMessage() {
+        if (path.value == null || path.value.isEmpty()) {
+            return "KeeperErrorCode = " + getCodeMessage(errorCode.value);
+        }
+        return "KeeperErrorCode = " + getCodeMessage(errorCode.value) + " for " + path.value;
+    }
+
+    void setMultiResults(List<OpResult> results) {
+        this.results.value = results;
+    }
+
+    /**
+     * If this exception was thrown by a multi-request then the (partial) results
+     * and error codes can be retrieved using this getter.
+     * @return A copy of the list of results from the operations in the multi-request.
+     *
+     * @since 3.4.0
+     *
+     */
+    public List<OpResult> getResults() {
+        return results.value != null ? new ArrayList<OpResult>(results.value) : null;
+    }
+
+    /**
+     *  @see Code#APIERROR
+     */
+    @InterfaceAudience.Public
+    public static class APIErrorException extends KeeperException {
+
+        public APIErrorException() {
+            super(Code.APIERROR);
+        }
+
+    }
+
+    /**
+     *  @see Code#AUTHFAILED
+     */
+    @InterfaceAudience.Public
+    public static class AuthFailedException extends KeeperException {
+
+        public AuthFailedException() {
+            super(Code.AUTHFAILED);
+        }
+
+    }
+
+    /**
+     *  @see Code#BADARGUMENTS
+     */
+    @InterfaceAudience.Public
+    public static class BadArgumentsException extends KeeperException {
+
+        public BadArgumentsException() {
+            super(Code.BADARGUMENTS);
+        }
+        public BadArgumentsException(String path) {
+            super(Code.BADARGUMENTS, path);
+        }
+
+    }
+
+    /**
+     * @see Code#BADVERSION
+     */
+    @InterfaceAudience.Public
+    public static class BadVersionException extends KeeperException {
+
+        public BadVersionException() {
+            super(Code.BADVERSION);
+        }
+        public BadVersionException(String path) {
+            super(Code.BADVERSION, path);
+        }
+
+    }
+
+    /**
+     * @see Code#CONNECTIONLOSS
+     */
+    @InterfaceAudience.Public
+    public static class ConnectionLossException extends KeeperException {
+
+        public ConnectionLossException() {
+            super(Code.CONNECTIONLOSS);
+        }
+
+    }
+
+    /**
+     * @see Code#DATAINCONSISTENCY
+     */
+    @InterfaceAudience.Public
+    public static class DataInconsistencyException extends KeeperException {
+
+        public DataInconsistencyException() {
+            super(Code.DATAINCONSISTENCY);
+        }
+
+    }
+
+    /**
+     * @see Code#INVALIDACL
+     */
+    @InterfaceAudience.Public
+    public static class InvalidACLException extends KeeperException {
+
+        public InvalidACLException() {
+            super(Code.INVALIDACL);
+        }
+        public InvalidACLException(String path) {
+            super(Code.INVALIDACL, path);
+        }
+
+    }
+
+    /**
+     * @see Code#INVALIDCALLBACK
+     */
+    @InterfaceAudience.Public
+    public static class InvalidCallbackException extends KeeperException {
+
+        public InvalidCallbackException() {
+            super(Code.INVALIDCALLBACK);
+        }
+
+    }
+
+    /**
+     * @see Code#MARSHALLINGERROR
+     */
+    @InterfaceAudience.Public
+    public static class MarshallingErrorException extends KeeperException {
+
+        public MarshallingErrorException() {
+            super(Code.MARSHALLINGERROR);
+        }
+
+    }
+
+    /**
+     * @see Code#NOAUTH
+     */
+    @InterfaceAudience.Public
+    public static class NoAuthException extends KeeperException {
+
+        public NoAuthException() {
+            super(Code.NOAUTH);
+        }
+
+    }
+
+    /**
+     * @see Code#NEWCONFIGNOQUORUM
+     */
+    @InterfaceAudience.Public
+    public static class NewConfigNoQuorum extends KeeperException {
+
+        public NewConfigNoQuorum() {
+            super(Code.NEWCONFIGNOQUORUM);
+        }
+
+    }
+
+    /**
+     * @see Code#RECONFIGINPROGRESS
+     */
+    @InterfaceAudience.Public
+    public static class ReconfigInProgress extends KeeperException {
+
+        public ReconfigInProgress() {
+            super(Code.RECONFIGINPROGRESS);
+        }
+
+    }
+
+    /**
+     * @see Code#NOCHILDRENFOREPHEMERALS
+     */
+    @InterfaceAudience.Public
+    public static class NoChildrenForEphemeralsException extends KeeperException {
+
+        public NoChildrenForEphemeralsException() {
+            super(Code.NOCHILDRENFOREPHEMERALS);
+        }
+        public NoChildrenForEphemeralsException(String path) {
+            super(Code.NOCHILDRENFOREPHEMERALS, path);
+        }
+
+    }
+
+    /**
+     * @see Code#NODEEXISTS
+     */
+    @InterfaceAudience.Public
+    public static class NodeExistsException extends KeeperException {
+
+        public NodeExistsException() {
+            super(Code.NODEEXISTS);
+        }
+        public NodeExistsException(String path) {
+            super(Code.NODEEXISTS, path);
+        }
+
+    }
+
+    /**
+     * @see Code#NONODE
+     */
+    @InterfaceAudience.Public
+    public static class NoNodeException extends KeeperException {
+
+        public NoNodeException() {
+            super(Code.NONODE);
+        }
+        public NoNodeException(String path) {
+            super(Code.NONODE, path);
+        }
+
+    }
+
+    /**
+     * @see Code#NOTEMPTY
+     */
+    @InterfaceAudience.Public
+    public static class NotEmptyException extends KeeperException {
+
+        public NotEmptyException() {
+            super(Code.NOTEMPTY);
+        }
+        public NotEmptyException(String path) {
+            super(Code.NOTEMPTY, path);
+        }
+
+    }
+
+    /**
+     * @see Code#OPERATIONTIMEOUT
+     */
+    @InterfaceAudience.Public
+    public static class OperationTimeoutException extends KeeperException {
+
+        public OperationTimeoutException() {
+            super(Code.OPERATIONTIMEOUT);
+        }
+
+    }
+
+    /**
+     * @see Code#RUNTIMEINCONSISTENCY
+     */
+    @InterfaceAudience.Public
+    public static class RuntimeInconsistencyException extends KeeperException {
+
+        public RuntimeInconsistencyException() {
+            super(Code.RUNTIMEINCONSISTENCY);
+        }
+
+    }
+
+    /**
+     * @see Code#SESSIONEXPIRED
+     */
+    @InterfaceAudience.Public
+    public static class SessionExpiredException extends KeeperException {
+
+        public SessionExpiredException() {
+            super(Code.SESSIONEXPIRED);
+        }
+
+    }
+
+    /**
+     * @see Code#UNKNOWNSESSION
+     */
+    @InterfaceAudience.Public
+    public static class UnknownSessionException extends KeeperException {
+
+        public UnknownSessionException() {
+            super(Code.UNKNOWNSESSION);
+        }
+
+    }
+
+    /**
+     * @see Code#SESSIONMOVED
+     */
+    @InterfaceAudience.Public
+    public static class SessionMovedException extends KeeperException {
+
+        public SessionMovedException() {
+            super(Code.SESSIONMOVED);
+        }
+
+    }
+
+    /**
+     * @see Code#NOTREADONLY
+     */
+    @InterfaceAudience.Public
+    public static class NotReadOnlyException extends KeeperException {
+
+        public NotReadOnlyException() {
+            super(Code.NOTREADONLY);
+        }
+
+    }
+
+    /**
+     * @see Code#EPHEMERALONLOCALSESSION
+     */
+    @InterfaceAudience.Public
+    public static class EphemeralOnLocalSessionException extends KeeperException {
+
+        public EphemeralOnLocalSessionException() {
+            super(Code.EPHEMERALONLOCALSESSION);
+        }
+
+    }
+
+    /**
+     * @see Code#SYSTEMERROR
+     */
+    @InterfaceAudience.Public
+    public static class SystemErrorException extends KeeperException {
+
+        public SystemErrorException() {
+            super(Code.SYSTEMERROR);
+        }
+
+    }
+
+    /**
+     * @see Code#UNIMPLEMENTED
+     */
+    @InterfaceAudience.Public
+    public static class UnimplementedException extends KeeperException {
+
+        public UnimplementedException() {
+            super(Code.UNIMPLEMENTED);
+        }
+
+    }
+
+    /**
+     * @see Code#NOWATCHER
+     */
+    @InterfaceAudience.Public
+    public static class NoWatcherException extends KeeperException {
+
+        public NoWatcherException() {
+            super(Code.NOWATCHER);
+        }
+
+        public NoWatcherException(String path) {
+            super(Code.NOWATCHER, path);
+        }
+
+    }
+
+    /**
+     * @see Code#RECONFIGDISABLED
+     */
+    @InterfaceAudience.Public
+    public static class ReconfigDisabledException extends KeeperException {
+
+        public ReconfigDisabledException() {
+            super(Code.RECONFIGDISABLED);
+        }
+        public ReconfigDisabledException(String path) {
+            super(Code.RECONFIGDISABLED, path);
+        }
+
+    }
+
+    /**
+     * @see Code#SESSIONCLOSEDREQUIRESASLAUTH
+     */
+    public static class SessionClosedRequireAuthException extends KeeperException {
+
+        public SessionClosedRequireAuthException() {
+            super(Code.SESSIONCLOSEDREQUIRESASLAUTH);
+        }
+        public SessionClosedRequireAuthException(String path) {
+            super(Code.SESSIONCLOSEDREQUIRESASLAUTH, path);
+        }
+
+    }
+
+    /**
+     * @see Code#REQUESTTIMEOUT
+     */
+    public static class RequestTimeoutException extends KeeperException {
+
+        public RequestTimeoutException() {
+            super(Code.REQUESTTIMEOUT);
+        }
+
+    }
+
+    /**
+     * @see Code#QUOTAEXCEEDED
+     */
+    @InterfaceAudience.Public
+    public static class QuotaExceededException extends KeeperException {
+        public QuotaExceededException() {
+            super(Code.QUOTAEXCEEDED);
+        }
+        public QuotaExceededException(String path) {
+            super(Code.QUOTAEXCEEDED, path);
+        }
+    }
+
+    /**
+     * @see Code#THROTTLEDOP
+     */
+    public static class ThrottledOpException extends KeeperException {
+        public ThrottledOpException() {
+            super(Code.THROTTLEDOP);
+        }
+    }
+}

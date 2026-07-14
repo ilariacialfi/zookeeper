@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CommandResponse.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server.admin</a> &gt; <span class="el_source">CommandResponse.java</span></div><h1>CommandResponse.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the &quot;License&quot;); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.zookeeper.server.admin;
+
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import javax.servlet.http.HttpServletResponse;
+
+/**
+ * A response from running a {@link Command}.
+ */
+public class CommandResponse {
+
+    /**
+     * The key in the map returned by {@link #toMap()} for the command name.
+     */
+    public static final String KEY_COMMAND = &quot;command&quot;;
+
+    /**
+     * The key in the map returned by {@link #toMap()} for the error string.
+     */
+    public static final String KEY_ERROR = &quot;error&quot;;
+
+    private final String command;
+    private final String error;
+    private final Map&lt;String, Object&gt; data;
+    private final Map&lt;String, String&gt; headers;
+    private int statusCode;
+    private InputStream inputStream;
+
+    /**
+     * Creates a new response with no error string.
+     *
+     * @param command command name
+     */
+    public CommandResponse(String command) {
+<span class="fc" id="L53">        this(command, null, HttpServletResponse.SC_OK);</span>
+<span class="fc" id="L54">    }</span>
+
+    /**
+     * Creates a new response.
+     *
+     * @param command command name
+     * @param error error string (may be null)
+     * @param statusCode http status code
+     */
+    public CommandResponse(String command, String error, int statusCode) {
+<span class="fc" id="L64">        this(command, error, statusCode, null);</span>
+<span class="fc" id="L65">    }</span>
+
+    /**
+     * Creates a new response.
+     *
+     * @param command command name
+     * @param error error string (may be null)
+     * @param statusCode http status code
+     * @param inputStream inputStream to send out data (may be null)
+     */
+<span class="fc" id="L75">    public CommandResponse(final String command, final String error, final int statusCode, final InputStream inputStream) {</span>
+<span class="fc" id="L76">        this.command = command;</span>
+<span class="fc" id="L77">        this.error = error;</span>
+<span class="fc" id="L78">        data = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L79">        headers = new HashMap&lt;&gt;();</span>
+<span class="fc" id="L80">        this.statusCode = statusCode;</span>
+<span class="fc" id="L81">        this.inputStream = inputStream;</span>
+<span class="fc" id="L82">    }</span>
+
+    /**
+     * Gets the command name.
+     *
+     * @return command name
+     */
+    public String getCommand() {
+<span class="fc" id="L90">        return command;</span>
+    }
+
+    /**
+     * Gets the error string (may be null).
+     *
+     * @return error string
+     */
+    public String getError() {
+<span class="fc" id="L99">        return error;</span>
+    }
+
+    /**
+     * Gets the http status code.
+     *
+     * @return http status code
+     */
+    public int getStatusCode() {
+<span class="fc" id="L108">        return statusCode;</span>
+    }
+
+    /**
+     * Sets the http status code.
+     *
+     * @param statusCode http status code
+     */
+    public void setStatusCode(int statusCode) {
+<span class="fc" id="L117">        this.statusCode = statusCode;</span>
+<span class="fc" id="L118">    }</span>
+
+    /**
+     * Gets the InputStream (may be null).
+     *
+     * @return InputStream
+     */
+    public InputStream getInputStream() {
+<span class="fc" id="L126">        return inputStream;</span>
+    }
+
+    /**
+     * Sets the InputStream.
+     *
+     * @param inputStream InputStream
+     */
+    public void setInputStream(final InputStream inputStream) {
+<span class="fc" id="L135">        this.inputStream = inputStream;</span>
+<span class="fc" id="L136">    }</span>
+
+    /**
+     * Adds a key/value pair to this response.
+     *
+     * @param key key
+     * @param value value
+     * @return prior value for key, or null if none
+     */
+    public Object put(String key, Object value) {
+<span class="fc" id="L146">        return data.put(key, value);</span>
+    }
+
+    /**
+     * Adds all key/value pairs in the given map to this response.
+     *
+     * @param m map of key/value pairs
+     */
+    public void putAll(Map&lt;String, ?&gt; m) {
+<span class="fc" id="L155">        data.putAll(m);</span>
+<span class="fc" id="L156">    }</span>
+
+    /**
+     * Adds a header to this response.
+     *
+     * @param name name of the header
+     * @param value value of the header
+     */
+    public void addHeader(final String name, final String value) {
+<span class="fc" id="L165">        headers.put(name, value);</span>
+<span class="fc" id="L166">    }</span>
+
+    /**
+     * Returns all headers.
+     *
+     * @return map representation of all headers
+     */
+    public Map&lt;String, String&gt; getHeaders() {
+<span class="fc" id="L174">        return headers;</span>
+    }
+
+    /**
+     * Converts this response to a map. The returned map is mutable, and
+     * changes to it do not reflect back into this response.
+     *
+     * @return map representation of response
+     */
+    public Map&lt;String, Object&gt; toMap() {
+<span class="fc" id="L184">        Map&lt;String, Object&gt; m = new LinkedHashMap&lt;&gt;(data);</span>
+<span class="fc" id="L185">        m.put(KEY_COMMAND, command);</span>
+<span class="fc" id="L186">        m.put(KEY_ERROR, error);</span>
+<span class="fc" id="L187">        m.putAll(data);</span>
+<span class="fc" id="L188">        return m;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

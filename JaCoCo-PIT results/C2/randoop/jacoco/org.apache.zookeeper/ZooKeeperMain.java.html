@@ -1,0 +1,476 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ZooKeeperMain.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper</a> &gt; <span class="el_source">ZooKeeperMain.java</span></div><h1>ZooKeeperMain.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.zookeeper.admin.ZooKeeperAdmin;
+import org.apache.zookeeper.cli.CliCommand;
+import org.apache.zookeeper.cli.CliException;
+import org.apache.zookeeper.cli.CommandFactory;
+import org.apache.zookeeper.cli.CommandNotFoundException;
+import org.apache.zookeeper.cli.MalformedCommandException;
+import org.apache.zookeeper.client.ZKClientConfig;
+import org.apache.zookeeper.common.ConfigException;
+import org.apache.zookeeper.server.ExitCode;
+import org.apache.zookeeper.util.ServiceUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * The command line client to ZooKeeper.
+ *
+ */
+@InterfaceAudience.Public
+public class ZooKeeperMain {
+
+<span class="nc" id="L62">    private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperMain.class);</span>
+<span class="nc" id="L63">    static final Map&lt;String, String&gt; commandMap = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L64">    static final Map&lt;String, CliCommand&gt; commandMapCli = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L66">    protected MyCommandOptions cl = new MyCommandOptions();</span>
+<span class="nc" id="L67">    protected HashMap&lt;Integer, String&gt; history = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L68">    protected int commandCount = 0;</span>
+<span class="nc" id="L69">    protected boolean printWatches = true;</span>
+<span class="nc" id="L70">    protected int exitCode = ExitCode.EXECUTION_FINISHED.getValue();</span>
+
+    protected ZooKeeper zk;
+<span class="nc" id="L73">    protected String host = &quot;&quot;;</span>
+<span class="nc" id="L74">    private CountDownLatch connectLatch = null;</span>
+
+    public boolean getPrintWatches() {
+<span class="nc" id="L77">        return printWatches;</span>
+    }
+
+    private static final String CMD_CONNECT = &quot;connect&quot;;
+    private static final String CMD_HISTORY = &quot;history&quot;;
+    private static final String CMD_REDO = &quot;redo&quot;;
+    private static final String CMD_QUIT = &quot;quit&quot;;
+    private static final String CMD_EXIT = &quot;exit&quot;;
+    private static final String CMD_PRINT_WATCHES = &quot;printwatches&quot;;
+
+
+    static {
+<span class="nc" id="L89">        commandMap.put(CMD_CONNECT, &quot;host:port&quot;);</span>
+<span class="nc" id="L90">        commandMap.put(CMD_HISTORY, &quot;&quot;);</span>
+<span class="nc" id="L91">        commandMap.put(CMD_REDO, &quot;cmdno&quot;);</span>
+<span class="nc" id="L92">        commandMap.put(CMD_PRINT_WATCHES, &quot;on|off&quot;);</span>
+<span class="nc" id="L93">        commandMap.put(CMD_QUIT, &quot;&quot;);</span>
+<span class="nc" id="L94">        commandMap.put(CMD_EXIT, &quot;&quot;);</span>
+<span class="nc" id="L95">        Stream.of(CommandFactory.Command.values())</span>
+<span class="nc" id="L96">            .map(command -&gt; CommandFactory.getInstance(command))</span>
+            // add all commands to commandMapCli and commandMap
+<span class="nc" id="L98">            .forEach(cliCommand -&gt;{</span>
+<span class="nc" id="L99">                cliCommand.addToMap(commandMapCli);</span>
+<span class="nc" id="L100">                commandMap.put(</span>
+<span class="nc" id="L101">                        cliCommand.getCmdStr(),</span>
+<span class="nc" id="L102">                        cliCommand.getOptionStr());</span>
+<span class="nc" id="L103">            });</span>
+<span class="nc" id="L104">    }</span>
+
+    static void usage() {
+<span class="nc" id="L107">        System.err.println(&quot;ZooKeeper -server host:port -client-configuration properties-file cmd args&quot;);</span>
+<span class="nc" id="L108">        List&lt;String&gt; cmdList = new ArrayList&lt;&gt;(commandMap.keySet());</span>
+<span class="nc" id="L109">        Collections.sort(cmdList);</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">        for (String cmd : cmdList) {</span>
+<span class="nc" id="L111">            System.err.println(&quot;\t&quot; + cmd + &quot; &quot; + commandMap.get(cmd));</span>
+<span class="nc" id="L112">        }</span>
+<span class="nc" id="L113">    }</span>
+
+<span class="nc" id="L115">    private class MyWatcher implements Watcher {</span>
+
+        public void process(WatchedEvent event) {
+<span class="nc bnc" id="L118" title="All 2 branches missed.">            if (getPrintWatches()) {</span>
+<span class="nc" id="L119">                ZooKeeperMain.printMessage(&quot;WATCHER::&quot;);</span>
+<span class="nc" id="L120">                ZooKeeperMain.printMessage(event.toString());</span>
+            }
+<span class="nc bnc" id="L122" title="All 2 branches missed.">            if (connectLatch != null) {</span>
+                // connection success
+<span class="nc bnc" id="L124" title="All 2 branches missed.">                if (event.getType() == Event.EventType.None</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">                    &amp;&amp; event.getState() == Event.KeeperState.SyncConnected) {</span>
+<span class="nc" id="L126">                    connectLatch.countDown();</span>
+                }
+            }
+<span class="nc" id="L129">        }</span>
+
+    }
+
+    /**
+     * A storage class for both command line options and shell commands.
+     *
+     */
+    static class MyCommandOptions {
+
+<span class="nc" id="L139">        private Map&lt;String, String&gt; options = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L140">        private List&lt;String&gt; cmdArgs = null;</span>
+<span class="nc" id="L141">        private String command = null;</span>
+<span class="nc" id="L142">        public static final Pattern ARGS_PATTERN = Pattern.compile(&quot;\\s*([^\&quot;\']\\S*|\&quot;[^\&quot;]*\&quot;|'[^']*')\\s*&quot;);</span>
+<span class="nc" id="L143">        public static final Pattern QUOTED_PATTERN = Pattern.compile(&quot;^([\'\&quot;])(.*)(\\1)$&quot;);</span>
+
+<span class="nc" id="L145">        public MyCommandOptions() {</span>
+<span class="nc" id="L146">            options.put(&quot;server&quot;, &quot;localhost:2181&quot;);</span>
+<span class="nc" id="L147">            options.put(&quot;timeout&quot;, &quot;30000&quot;);</span>
+<span class="nc" id="L148">        }</span>
+
+        public String getOption(String opt) {
+<span class="nc" id="L151">            return options.get(opt);</span>
+        }
+
+        public String getCommand() {
+<span class="nc" id="L155">            return command;</span>
+        }
+
+        public String getCmdArgument(int index) {
+<span class="nc" id="L159">            return cmdArgs.get(index);</span>
+        }
+
+        public int getNumArguments() {
+<span class="nc" id="L163">            return cmdArgs.size();</span>
+        }
+
+        public String[] getArgArray() {
+<span class="nc" id="L167">            return cmdArgs.toArray(new String[0]);</span>
+        }
+
+        /**
+         * Parses a command line that may contain one or more flags
+         * before an optional command string
+         * @param args command line arguments
+         * @return true if parsing succeeded, false otherwise.
+         */
+        public boolean parseOptions(String[] args) {
+<span class="nc" id="L177">            List&lt;String&gt; argList = Arrays.asList(args);</span>
+<span class="nc" id="L178">            Iterator&lt;String&gt; it = argList.iterator();</span>
+
+<span class="nc bnc" id="L180" title="All 2 branches missed.">            while (it.hasNext()) {</span>
+<span class="nc" id="L181">                String opt = it.next();</span>
+                try {
+<span class="nc bnc" id="L183" title="All 2 branches missed.">                    if (opt.equals(&quot;-server&quot;)) {</span>
+<span class="nc" id="L184">                        options.put(&quot;server&quot;, it.next());</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">                    } else if (opt.equals(&quot;-timeout&quot;)) {</span>
+<span class="nc" id="L186">                        options.put(&quot;timeout&quot;, it.next());</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">                    } else if (opt.equals(&quot;-r&quot;)) {</span>
+<span class="nc" id="L188">                        options.put(&quot;readonly&quot;, &quot;true&quot;);</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">                    } else if (opt.equals(&quot;-client-configuration&quot;)) {</span>
+<span class="nc" id="L190">                        options.put(&quot;client-configuration&quot;, it.next());</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">                    } else if (opt.equals(&quot;-waitforconnection&quot;)) {</span>
+<span class="nc" id="L192">                        options.put(&quot;waitforconnection&quot;, &quot;true&quot;);</span>
+                    }
+<span class="nc" id="L194">                } catch (NoSuchElementException e) {</span>
+<span class="nc" id="L195">                    System.err.println(&quot;Error: no argument found for option &quot; + opt);</span>
+<span class="nc" id="L196">                    return false;</span>
+<span class="nc" id="L197">                }</span>
+
+<span class="nc bnc" id="L199" title="All 2 branches missed.">                if (!opt.startsWith(&quot;-&quot;)) {</span>
+<span class="nc" id="L200">                    command = opt;</span>
+<span class="nc" id="L201">                    cmdArgs = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L202">                    cmdArgs.add(command);</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">                    while (it.hasNext()) {</span>
+<span class="nc" id="L204">                        cmdArgs.add(it.next());</span>
+                    }
+<span class="nc" id="L206">                    return true;</span>
+                }
+<span class="nc" id="L208">            }</span>
+<span class="nc" id="L209">            return true;</span>
+        }
+
+        /**
+         * Breaks a string into command + arguments.
+         * @param cmdstring string of form &quot;cmd arg1 arg2..etc&quot;
+         * @return true if parsing succeeded.
+         */
+        public boolean parseCommand(String cmdstring) {
+<span class="nc" id="L218">            Matcher matcher = ARGS_PATTERN.matcher(cmdstring);</span>
+
+<span class="nc" id="L220">            List&lt;String&gt; args = new LinkedList&lt;&gt;();</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">            while (matcher.find()) {</span>
+<span class="nc" id="L222">                String value = matcher.group(1);</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                if (QUOTED_PATTERN.matcher(value).matches()) {</span>
+                    // Strip off the surrounding quotes
+<span class="nc" id="L225">                    value = value.substring(1, value.length() - 1);</span>
+                }
+<span class="nc" id="L227">                args.add(value);</span>
+<span class="nc" id="L228">            }</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">            if (args.isEmpty()) {</span>
+<span class="nc" id="L230">                return false;</span>
+            }
+<span class="nc" id="L232">            command = args.get(0);</span>
+<span class="nc" id="L233">            cmdArgs = args;</span>
+<span class="nc" id="L234">            return true;</span>
+        }
+
+    }
+
+    /**
+     * Makes a list of possible completions, either for commands
+     * or for zk nodes if the token to complete begins with /
+     *
+     */
+
+    protected void addToHistory(int i, String cmd) {
+<span class="nc" id="L246">        history.put(i, cmd);</span>
+<span class="nc" id="L247">    }</span>
+
+    public static List&lt;String&gt; getCommands() {
+<span class="nc" id="L250">        List&lt;String&gt; cmdList = new ArrayList&lt;&gt;(commandMap.keySet());</span>
+<span class="nc" id="L251">        Collections.sort(cmdList);</span>
+<span class="nc" id="L252">        return cmdList;</span>
+    }
+
+    protected String getPrompt() {
+<span class="nc" id="L256">        return &quot;[zk: &quot; + host + &quot;(&quot; + zk.getState() + &quot;)&quot; + &quot; &quot; + commandCount + &quot;] &quot;;</span>
+    }
+
+    public static void printMessage(String msg) {
+<span class="nc" id="L260">        System.out.println(&quot;\n&quot; + msg);</span>
+<span class="nc" id="L261">    }</span>
+
+    protected void connectToZK(String newHost) throws InterruptedException, IOException {
+<span class="nc bnc" id="L264" title="All 4 branches missed.">        if (zk != null &amp;&amp; zk.getState().isAlive()) {</span>
+<span class="nc" id="L265">            zk.close();</span>
+        }
+
+<span class="nc" id="L268">        host = newHost;</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">        boolean readOnly = cl.getOption(&quot;readonly&quot;) != null;</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">        if (cl.getOption(&quot;secure&quot;) != null) {</span>
+<span class="nc" id="L271">            System.setProperty(ZKClientConfig.SECURE_CLIENT, &quot;true&quot;);</span>
+<span class="nc" id="L272">            System.out.println(&quot;Secure connection is enabled&quot;);</span>
+        }
+
+<span class="nc" id="L275">        ZKClientConfig clientConfig = null;</span>
+
+<span class="nc bnc" id="L277" title="All 2 branches missed.">        if (cl.getOption(&quot;client-configuration&quot;) != null) {</span>
+            try {
+<span class="nc" id="L279">                clientConfig = new ZKClientConfig(Paths.get(cl.getOption(&quot;client-configuration&quot;)));</span>
+<span class="nc" id="L280">            } catch (ConfigException e) {</span>
+<span class="nc" id="L281">                e.printStackTrace();</span>
+<span class="nc" id="L282">                ServiceUtils.requestSystemExit(ExitCode.INVALID_INVOCATION.getValue());</span>
+<span class="nc" id="L283">            }</span>
+        }
+
+<span class="nc bnc" id="L286" title="All 2 branches missed.">        if (cl.getOption(&quot;waitforconnection&quot;) != null) {</span>
+<span class="nc" id="L287">            connectLatch = new CountDownLatch(1);</span>
+        }
+
+<span class="nc" id="L290">        int timeout = Integer.parseInt(cl.getOption(&quot;timeout&quot;));</span>
+<span class="nc" id="L291">        zk = new ZooKeeperAdmin(host, timeout, new MyWatcher(), readOnly, clientConfig);</span>
+<span class="nc bnc" id="L292" title="All 2 branches missed.">        if (connectLatch != null) {</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">            if (!connectLatch.await(timeout, TimeUnit.MILLISECONDS)) {</span>
+<span class="nc" id="L294">                zk.close();</span>
+<span class="nc" id="L295">                throw new IOException(KeeperException.create(KeeperException.Code.CONNECTIONLOSS));</span>
+            }
+        }
+
+<span class="nc" id="L299">    }</span>
+
+    public static void main(String[] args) throws IOException, InterruptedException {
+<span class="nc" id="L302">        ZooKeeperMain main = new ZooKeeperMain(args);</span>
+<span class="nc" id="L303">        main.run();</span>
+<span class="nc" id="L304">    }</span>
+
+<span class="nc" id="L306">    public ZooKeeperMain(String[] args) throws IOException, InterruptedException {</span>
+<span class="nc" id="L307">        cl.parseOptions(args);</span>
+<span class="nc" id="L308">        System.out.println(&quot;Connecting to &quot; + cl.getOption(&quot;server&quot;));</span>
+<span class="nc" id="L309">        connectToZK(cl.getOption(&quot;server&quot;));</span>
+<span class="nc" id="L310">    }</span>
+
+<span class="nc" id="L312">    public ZooKeeperMain(ZooKeeper zk) {</span>
+<span class="nc" id="L313">        this.zk = zk;</span>
+<span class="nc" id="L314">    }</span>
+
+    void run() throws IOException, InterruptedException {
+<span class="nc bnc" id="L317" title="All 2 branches missed.">        if (cl.getCommand() == null) {</span>
+<span class="nc" id="L318">            System.out.println(&quot;Welcome to ZooKeeper!&quot;);</span>
+
+<span class="nc" id="L320">            boolean jlinemissing = true;</span>
+            // only use jline if it's in the classpath
+            try {
+<span class="nc" id="L323">                Class&lt;?&gt; readerC = Class.forName(&quot;org.jline.reader.LineReader&quot;);</span>
+<span class="nc" id="L324">                Class&lt;?&gt; completerC = Class.forName(&quot;org.apache.zookeeper.JLineZNodeCompleter&quot;);</span>
+
+<span class="nc" id="L326">                jlinemissing = false;</span>
+<span class="nc" id="L327">                System.out.println(&quot;JLine support is enabled&quot;);</span>
+
+<span class="nc" id="L329">                Object completer = completerC.getConstructor(ZooKeeper.class).newInstance(zk);</span>
+<span class="nc" id="L330">                Object terminal = createTerminal();</span>
+<span class="nc" id="L331">                Object reader = createLineReader(terminal, completer);</span>
+
+                String line;
+<span class="nc" id="L334">                Method readLine = readerC.getMethod(&quot;readLine&quot;, String.class);</span>
+<span class="nc bnc" id="L335" title="All 2 branches missed.">                while ((line = (String) readLine.invoke(reader, getPrompt())) != null) {</span>
+<span class="nc" id="L336">                    executeLine(line);</span>
+                }
+<span class="nc" id="L338">            } catch (ClassNotFoundException</span>
+                | NoSuchMethodException
+                | InvocationTargetException
+                | IllegalAccessException
+                | InstantiationException e
+            ) {
+<span class="nc bnc" id="L344" title="All 2 branches missed.">                if (jlinemissing) {</span>
+<span class="nc" id="L345">                    LOG.debug(&quot;Unable to start jline&quot;, e);</span>
+                }
+<span class="nc" id="L347">            }</span>
+
+<span class="nc bnc" id="L349" title="All 2 branches missed.">            if (jlinemissing) {</span>
+<span class="nc" id="L350">                System.out.println(&quot;JLine support is disabled&quot;);</span>
+<span class="nc" id="L351">                BufferedReader br = new BufferedReader(new InputStreamReader(System.in));</span>
+
+                String line;
+<span class="nc bnc" id="L354" title="All 2 branches missed.">                while ((line = br.readLine()) != null) {</span>
+<span class="nc" id="L355">                    executeLine(line);</span>
+                }
+            }
+<span class="nc" id="L358">        } else {</span>
+            // Command line args non-null.  Run what was passed.
+<span class="nc" id="L360">            processCmd(cl);</span>
+        }
+<span class="nc" id="L362">        ServiceUtils.requestSystemExit(exitCode);</span>
+<span class="nc" id="L363">    }</span>
+
+    private static Object createTerminal() throws ClassNotFoundException, NoSuchMethodException, IllegalAccessException, InvocationTargetException {
+<span class="nc" id="L366">        Class&lt;?&gt; terminalBuilderC = Class.forName(&quot;org.jline.terminal.TerminalBuilder&quot;);</span>
+<span class="nc" id="L367">        Method terminalBuilderMethod = terminalBuilderC.getMethod(&quot;builder&quot;);</span>
+<span class="nc" id="L368">        Object terminalBuilder = terminalBuilderMethod.invoke(null);</span>
+<span class="nc" id="L369">        Method terminalBuildMethod = terminalBuilderC.getMethod(&quot;build&quot;);</span>
+<span class="nc" id="L370">        return terminalBuildMethod.invoke(terminalBuilder);</span>
+    }
+
+    private static Object createLineReader(Object terminal, Object completer) throws ClassNotFoundException, NoSuchMethodException, IllegalAccessException, InvocationTargetException {
+<span class="nc" id="L374">        Class&lt;?&gt; readerBuilderC = Class.forName(&quot;org.jline.reader.LineReaderBuilder&quot;);</span>
+<span class="nc" id="L375">        Method readerBuilderMethod = readerBuilderC.getMethod(&quot;builder&quot;);</span>
+<span class="nc" id="L376">        Object readerBuilder = readerBuilderMethod.invoke(null);</span>
+<span class="nc" id="L377">        Method setTerminalMethod = readerBuilderC.getMethod(&quot;terminal&quot;, Class.forName(&quot;org.jline.terminal.Terminal&quot;));</span>
+<span class="nc" id="L378">        setTerminalMethod.invoke(readerBuilder, terminal);</span>
+<span class="nc" id="L379">        Method setCompleterMethod = readerBuilderC.getMethod(&quot;completer&quot;, Class.forName(&quot;org.jline.reader.Completer&quot;));</span>
+<span class="nc" id="L380">        setCompleterMethod.invoke(readerBuilder, completer);</span>
+<span class="nc" id="L381">        Method readerBuildMethod = readerBuilderC.getMethod(&quot;build&quot;);</span>
+<span class="nc" id="L382">        return readerBuildMethod.invoke(readerBuilder);</span>
+    }
+
+    public void executeLine(String line) throws InterruptedException, IOException {
+<span class="nc bnc" id="L386" title="All 2 branches missed.">        if (!line.equals(&quot;&quot;)) {</span>
+<span class="nc" id="L387">            cl.parseCommand(line);</span>
+<span class="nc" id="L388">            addToHistory(commandCount, line);</span>
+<span class="nc" id="L389">            processCmd(cl);</span>
+<span class="nc" id="L390">            commandCount++;</span>
+        }
+<span class="nc" id="L392">    }</span>
+
+    protected boolean processCmd(MyCommandOptions co) throws IOException, InterruptedException {
+<span class="nc" id="L395">        boolean watch = false;</span>
+        try {
+<span class="nc" id="L397">            watch = processZKCmd(co);</span>
+<span class="nc" id="L398">            exitCode = ExitCode.EXECUTION_FINISHED.getValue();</span>
+<span class="nc" id="L399">        } catch (CliException ex) {</span>
+<span class="nc" id="L400">            exitCode = ex.getExitCode();</span>
+<span class="nc" id="L401">            System.err.println(ex.getMessage());</span>
+<span class="nc" id="L402">        }</span>
+<span class="nc" id="L403">        return watch;</span>
+    }
+
+    protected boolean processZKCmd(MyCommandOptions co) throws CliException, IOException, InterruptedException {
+<span class="nc" id="L407">        String[] args = co.getArgArray();</span>
+<span class="nc" id="L408">        String cmd = co.getCommand();</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">        if (args.length &lt; 1) {</span>
+<span class="nc" id="L410">            usage();</span>
+<span class="nc" id="L411">            throw new MalformedCommandException(&quot;No command entered&quot;);</span>
+        }
+
+<span class="nc bnc" id="L414" title="All 2 branches missed.">        if (!commandMap.containsKey(cmd)) {</span>
+<span class="nc" id="L415">            usage();</span>
+<span class="nc" id="L416">            throw new CommandNotFoundException(&quot;Command not found &quot; + cmd);</span>
+        }
+
+<span class="nc" id="L419">        boolean watch = false;</span>
+
+<span class="nc" id="L421">        LOG.debug(&quot;Processing {}&quot;, cmd);</span>
+
+<span class="nc bnc" id="L423" title="All 4 branches missed.">        if (cmd.equals(CMD_QUIT) || cmd.equals(CMD_EXIT)) {</span>
+<span class="nc" id="L424">            zk.close();</span>
+<span class="nc" id="L425">            ServiceUtils.requestSystemExit(exitCode);</span>
+<span class="nc bnc" id="L426" title="All 4 branches missed.">        } else if (cmd.equals(CMD_REDO) &amp;&amp; args.length &gt;= 2) {</span>
+<span class="nc" id="L427">            Integer i = Integer.decode(args[1]);</span>
+<span class="nc bnc" id="L428" title="All 4 branches missed.">            if (commandCount &lt;= i || i &lt; 0) { // don't allow redoing this redo</span>
+<span class="nc" id="L429">                throw new MalformedCommandException(&quot;Command index out of range&quot;);</span>
+            }
+<span class="nc" id="L431">            cl.parseCommand(history.get(i));</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">            if (cl.getCommand().equals(CMD_REDO)) {</span>
+<span class="nc" id="L433">                throw new MalformedCommandException(&quot;No redoing redos&quot;);</span>
+            }
+<span class="nc" id="L435">            history.put(commandCount, history.get(i));</span>
+<span class="nc" id="L436">            processCmd(cl);</span>
+<span class="nc bnc" id="L437" title="All 2 branches missed.">        } else if (cmd.equals(CMD_HISTORY)) {</span>
+<span class="nc bnc" id="L438" title="All 2 branches missed.">            for (int i = commandCount - 10; i &lt;= commandCount; ++i) {</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">                if (i &lt; 0) {</span>
+<span class="nc" id="L440">                    continue;</span>
+                }
+<span class="nc" id="L442">                System.out.println(i + &quot; - &quot; + history.get(i));</span>
+            }
+<span class="nc bnc" id="L444" title="All 2 branches missed.">        } else if (cmd.equals(CMD_PRINT_WATCHES)) {</span>
+<span class="nc bnc" id="L445" title="All 2 branches missed.">            if (args.length == 1) {</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">                System.out.println(&quot;printwatches is &quot; + (printWatches ? &quot;on&quot; : &quot;off&quot;));</span>
+            } else {
+<span class="nc" id="L448">                printWatches = args[1].equals(&quot;on&quot;);</span>
+            }
+<span class="nc bnc" id="L450" title="All 2 branches missed.">        } else if (cmd.equals(CMD_CONNECT)) {</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">            if (args.length &gt;= 2) {</span>
+<span class="nc" id="L452">                connectToZK(args[1]);</span>
+            } else {
+<span class="nc" id="L454">                connectToZK(host);</span>
+            }
+        }
+
+        // Below commands all need a live connection
+<span class="nc bnc" id="L459" title="All 4 branches missed.">        if (zk == null || !zk.getState().isAlive()) {</span>
+<span class="nc" id="L460">            System.out.println(&quot;Not connected&quot;);</span>
+<span class="nc" id="L461">            return false;</span>
+        }
+
+        // execute from commandMap
+<span class="nc" id="L465">        CliCommand cliCmd = commandMapCli.get(cmd);</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">        if (cliCmd != null) {</span>
+<span class="nc" id="L467">            cliCmd.setZk(zk);</span>
+<span class="nc" id="L468">            watch = cliCmd.parse(args).exec();</span>
+<span class="nc bnc" id="L469" title="All 2 branches missed.">        } else if (!commandMap.containsKey(cmd)) {</span>
+<span class="nc" id="L470">            usage();</span>
+        }
+<span class="nc" id="L472">        return watch;</span>
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

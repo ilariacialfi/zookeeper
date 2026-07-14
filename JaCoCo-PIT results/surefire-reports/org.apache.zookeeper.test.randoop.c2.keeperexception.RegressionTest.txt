@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: org.apache.zookeeper.test.randoop.c2.keeperexception.RegressionTest
+-------------------------------------------------------------------------------
+Tests run: 1476, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.236 s - in org.apache.zookeeper.test.randoop.c2.keeperexception.RegressionTest

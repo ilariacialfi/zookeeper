@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ConnectStringParser.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.client</a> &gt; <span class="el_source">ConnectStringParser.java</span></div><h1>ConnectStringParser.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.client;
+
+import static org.apache.zookeeper.common.StringUtils.split;
+import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.zookeeper.common.NetUtils;
+import org.apache.zookeeper.common.PathUtils;
+import org.apache.zookeeper.common.StringUtils;
+
+/**
+ * A parser for ZooKeeper Client connect strings.
+ *
+ * This class is not meant to be seen or used outside of ZooKeeper itself.
+ *
+ * The chrootPath member should be replaced by a Path object in issue
+ * ZOOKEEPER-849.
+ *
+ * @see org.apache.zookeeper.ZooKeeper
+ */
+public final class ConnectStringParser {
+
+    private static final int DEFAULT_PORT = 2181;
+    private static final String DNS_SRV_PREFIX = &quot;dns-srv://&quot;;
+
+<span class="nc" id="L44">    public enum ConnectionType {</span>
+<span class="nc" id="L45">        DNS_SRV,</span>
+<span class="nc" id="L46">        HOST_PORT</span>
+    }
+
+    private String chrootPath;
+<span class="nc" id="L50">    private final ArrayList&lt;InetSocketAddress&gt; serverAddresses = new ArrayList&lt;&gt;();</span>
+    private final ConnectionType connectionType;
+    private final String connectString;
+
+    /**
+     * Constructs a ConnectStringParser with given connect string.
+     *
+     * &lt;p&gt;Supports two connection string formats:&lt;/p&gt;
+     * &lt;ul&gt;
+     * &lt;li&gt;&lt;strong&gt;Host:Port format:&lt;/strong&gt; &quot;host1:2181,host2:2181/chroot&quot;&lt;/li&gt;
+     * &lt;li&gt;&lt;strong&gt;DNS SRV format:&lt;/strong&gt; &quot;dns-srv://service.domain.com/chroot&quot;&lt;/li&gt;
+     * &lt;/ul&gt;
+     *
+     * @param connectString the connect string to parse
+     * @throws IllegalArgumentException if connectString is null/empty or contains invalid chroot path
+     */
+<span class="nc" id="L66">    public ConnectStringParser(final String connectString) {</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">        if (StringUtils.isBlank(connectString)) {</span>
+<span class="nc" id="L68">            throw new IllegalArgumentException(&quot;Connect string cannot be null or empty&quot;);</span>
+        }
+
+<span class="nc bnc" id="L71" title="All 2 branches missed.">        if (connectString.startsWith(DNS_SRV_PREFIX)) {</span>
+<span class="nc" id="L72">            connectionType = ConnectionType.DNS_SRV;</span>
+<span class="nc" id="L73">            parseDnsSrvFormat(connectString);</span>
+        } else {
+<span class="nc" id="L75">            connectionType = ConnectionType.HOST_PORT;</span>
+<span class="nc" id="L76">            parseHostPortFormat(connectString);</span>
+        }
+<span class="nc" id="L78">        this.connectString = connectString;</span>
+<span class="nc" id="L79">    }</span>
+
+    public String getChrootPath() {
+<span class="nc" id="L82">        return chrootPath;</span>
+    }
+
+    public ArrayList&lt;InetSocketAddress&gt; getServerAddresses() {
+<span class="nc" id="L86">        return serverAddresses;</span>
+    }
+
+    public ConnectionType getConnectionType() {
+<span class="nc" id="L90">        return connectionType;</span>
+    }
+
+    public String getConnectString() {
+<span class="nc" id="L94">        return connectString;</span>
+    }
+
+    private String[] parseConnectString(final String connectString) {
+<span class="nc" id="L98">        String serverPart = connectString;</span>
+<span class="nc" id="L99">        String chrootPath = null;</span>
+
+        // parse out chroot, if any
+<span class="nc" id="L102">        final int off = connectString.indexOf('/');</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">        if (off &gt;= 0) {</span>
+<span class="nc" id="L104">            chrootPath = connectString.substring(off);</span>
+            // ignore &quot;/&quot; chroot spec, same as null
+<span class="nc bnc" id="L106" title="All 2 branches missed.">            if (chrootPath.length() == 1) {</span>
+<span class="nc" id="L107">                chrootPath = null;</span>
+            } else {
+<span class="nc" id="L109">                PathUtils.validatePath(chrootPath);</span>
+            }
+<span class="nc" id="L111">            serverPart = connectString.substring(0, off);</span>
+        }
+<span class="nc" id="L113">        return new String[]{serverPart, chrootPath};</span>
+    }
+
+    private void parseHostPortFormat(final String connectString) {
+<span class="nc" id="L117">        final String[] parts = parseConnectString(connectString);</span>
+<span class="nc" id="L118">        chrootPath = parts[1];</span>
+
+<span class="nc" id="L120">        final List&lt;String&gt; hostsList = split(parts[0], &quot;,&quot;);</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">        for (String host : hostsList) {</span>
+<span class="nc" id="L122">            int port = DEFAULT_PORT;</span>
+<span class="nc" id="L123">            final String[] hostAndPort = NetUtils.getIPV6HostAndPort(host);</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">            if (hostAndPort.length != 0) {</span>
+<span class="nc" id="L125">                host = hostAndPort[0];</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">                if (hostAndPort.length == 2) {</span>
+<span class="nc" id="L127">                    port = Integer.parseInt(hostAndPort[1]);</span>
+                }
+            } else {
+<span class="nc" id="L130">                int pidx = host.lastIndexOf(':');</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">                if (pidx &gt;= 0) {</span>
+                    // otherwise : is at the end of the string, ignore
+<span class="nc bnc" id="L133" title="All 2 branches missed.">                    if (pidx &lt; host.length() - 1) {</span>
+<span class="nc" id="L134">                        port = Integer.parseInt(host.substring(pidx + 1));</span>
+                    }
+<span class="nc" id="L136">                    host = host.substring(0, pidx);</span>
+                }
+            }
+<span class="nc" id="L139">            serverAddresses.add(InetSocketAddress.createUnresolved(host, port));</span>
+<span class="nc" id="L140">        }</span>
+<span class="nc" id="L141">    }</span>
+
+    private void parseDnsSrvFormat(final String connectString) {
+<span class="nc" id="L144">        final String[] parts = parseConnectString(connectString.substring(DNS_SRV_PREFIX.length()));</span>
+<span class="nc" id="L145">        chrootPath = parts[1];</span>
+        // The DNS service name is stored as a placeholder address
+        // The actual resolution will be handled by DnsSrvHostProvider
+<span class="nc" id="L148">        serverAddresses.add(InetSocketAddress.createUnresolved(parts[0], DEFAULT_PORT));</span>
+<span class="nc" id="L149">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

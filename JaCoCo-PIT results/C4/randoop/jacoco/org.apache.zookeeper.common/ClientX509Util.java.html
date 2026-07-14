@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ClientX509Util.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.common</a> &gt; <span class="el_source">ClientX509Util.java</span></div><h1>ClientX509Util.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.common;
+
+import io.netty.handler.ssl.DelegatingSslContext;
+import io.netty.handler.ssl.OpenSsl;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
+import java.security.Security;
+import java.util.Arrays;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.TrustManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * X509 utilities specific for client-server communication framework.
+ */
+<span class="nc" id="L39">public class ClientX509Util extends X509Util {</span>
+
+<span class="nc" id="L41">    private static final Logger LOG = LoggerFactory.getLogger(ClientX509Util.class);</span>
+
+<span class="nc" id="L43">    private final String sslAuthProviderProperty = getConfigPrefix() + &quot;authProvider&quot;;</span>
+<span class="nc" id="L44">    private final String sslProviderProperty = getConfigPrefix() + &quot;sslProvider&quot;;</span>
+
+    @Override
+    protected String getConfigPrefix() {
+<span class="nc" id="L48">        return &quot;zookeeper.ssl.&quot;;</span>
+    }
+
+    @Override
+    protected boolean shouldVerifyClientHostname() {
+<span class="nc" id="L53">        return false;</span>
+    }
+
+    public String getSslAuthProviderProperty() {
+<span class="nc" id="L57">        return sslAuthProviderProperty;</span>
+    }
+
+    public String getSslProviderProperty() {
+<span class="nc" id="L61">        return sslProviderProperty;</span>
+    }
+
+    public SslContext createNettySslContextForClient(ZKConfig config)
+        throws X509Exception.KeyManagerException, X509Exception.TrustManagerException, SSLException {
+<span class="nc" id="L66">        SslContextBuilder sslContextBuilder = SslContextBuilder.forClient();</span>
+
+<span class="nc" id="L68">        KeyManager km = buildKeyManager(config);</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">        if (km != null) {</span>
+<span class="nc" id="L70">            sslContextBuilder.keyManager(km);</span>
+        }
+
+<span class="nc" id="L73">        TrustManager tm = buildTrustManager(config);</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">        if (tm != null) {</span>
+<span class="nc" id="L75">            sslContextBuilder.trustManager(tm);</span>
+        }
+
+<span class="nc" id="L78">        handleTcnativeOcspStapling(sslContextBuilder, config);</span>
+<span class="nc" id="L79">        String[] enabledProtocols = getEnabledProtocols(config);</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">        if (enabledProtocols != null) {</span>
+<span class="nc" id="L81">            sslContextBuilder.protocols(enabledProtocols);</span>
+        }
+<span class="nc" id="L83">        Iterable&lt;String&gt; enabledCiphers = getCipherSuites(config);</span>
+<span class="nc bnc" id="L84" title="All 2 branches missed.">        if (enabledCiphers != null) {</span>
+<span class="nc" id="L85">            sslContextBuilder.ciphers(enabledCiphers);</span>
+        }
+<span class="nc" id="L87">        sslContextBuilder.sslProvider(getSslProvider(config));</span>
+
+<span class="nc" id="L89">        SslContext sslContext1 = sslContextBuilder.build();</span>
+
+<span class="nc bnc" id="L91" title="All 6 branches missed.">        if ((getFipsMode(config) || tm == null) &amp;&amp; isServerHostnameVerificationEnabled(config)) {</span>
+<span class="nc" id="L92">            return addHostnameVerification(sslContext1, &quot;Server&quot;);</span>
+        } else {
+<span class="nc" id="L94">            return sslContext1;</span>
+        }
+    }
+
+    public SslContext createNettySslContextForServer(ZKConfig config)
+        throws X509Exception.SSLContextException, X509Exception.KeyManagerException, X509Exception.TrustManagerException, SSLException {
+<span class="nc" id="L100">        KeyManager km = buildKeyManager(config);</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">        if (km == null) {</span>
+<span class="nc" id="L102">            throw new X509Exception.SSLContextException(</span>
+<span class="nc" id="L103">                &quot;Keystore is required for SSL server: &quot; + getSslKeystoreLocationProperty());</span>
+        }
+<span class="nc" id="L105">        return createNettySslContextForServer(config, km, buildTrustManager(config));</span>
+    }
+
+    public SslContext createNettySslContextForServer(ZKConfig config, KeyManager keyManager, TrustManager trustManager) throws SSLException {
+<span class="nc" id="L109">        SslContextBuilder sslContextBuilder = SslContextBuilder.forServer(keyManager);</span>
+
+<span class="nc bnc" id="L111" title="All 2 branches missed.">        if (trustManager != null) {</span>
+<span class="nc" id="L112">            sslContextBuilder.trustManager(trustManager);</span>
+        }
+
+<span class="nc" id="L115">        handleTcnativeOcspStapling(sslContextBuilder, config);</span>
+<span class="nc" id="L116">        String[] enabledProtocols = getEnabledProtocols(config);</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        if (enabledProtocols != null) {</span>
+<span class="nc" id="L118">            sslContextBuilder.protocols(enabledProtocols);</span>
+        }
+<span class="nc" id="L120">        sslContextBuilder.clientAuth(getClientAuth(config).toNettyClientAuth());</span>
+<span class="nc" id="L121">        Iterable&lt;String&gt; enabledCiphers = getCipherSuites(config);</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">        if (enabledCiphers != null) {</span>
+<span class="nc" id="L123">            sslContextBuilder.ciphers(enabledCiphers);</span>
+        }
+<span class="nc" id="L125">        sslContextBuilder.sslProvider(getSslProvider(config));</span>
+
+<span class="nc" id="L127">        SslContext sslContext1 = sslContextBuilder.build();</span>
+
+<span class="nc bnc" id="L129" title="All 6 branches missed.">        if ((getFipsMode(config) || trustManager == null) &amp;&amp; isClientHostnameVerificationEnabled(config)) {</span>
+<span class="nc" id="L130">            return addHostnameVerification(sslContext1, &quot;Client&quot;);</span>
+        } else {
+<span class="nc" id="L132">            return sslContext1;</span>
+        }
+    }
+
+    private SslContextBuilder handleTcnativeOcspStapling(SslContextBuilder builder, ZKConfig config) {
+<span class="nc" id="L137">        SslProvider sslProvider = getSslProvider(config);</span>
+<span class="nc bnc" id="L138" title="All 4 branches missed.">        boolean tcnative = sslProvider == SslProvider.OPENSSL || sslProvider == SslProvider.OPENSSL_REFCNT;</span>
+<span class="nc" id="L139">        boolean ocspEnabled = config.getBoolean(getSslOcspEnabledProperty(), Boolean.parseBoolean(Security.getProperty(&quot;ocsp.enable&quot;)));</span>
+
+<span class="nc bnc" id="L141" title="All 6 branches missed.">        if (tcnative &amp;&amp; ocspEnabled &amp;&amp; OpenSsl.isOcspSupported()) {</span>
+<span class="nc" id="L142">            builder.enableOcsp(ocspEnabled);</span>
+        }
+<span class="nc" id="L144">        return builder;</span>
+    }
+
+    private SslContext addHostnameVerification(SslContext sslContext, String clientOrServer) {
+<span class="nc" id="L148">        return new DelegatingSslContext(sslContext) {</span>
+            @Override
+            protected void initEngine(SSLEngine sslEngine) {
+<span class="nc" id="L151">                SSLParameters sslParameters = sslEngine.getSSLParameters();</span>
+<span class="nc" id="L152">                sslParameters.setEndpointIdentificationAlgorithm(&quot;HTTPS&quot;);</span>
+<span class="nc" id="L153">                sslEngine.setSSLParameters(sslParameters);</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">                if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L155">                    LOG.debug(&quot;{} hostname verification: enabled HTTPS style endpoint identification algorithm&quot;, clientOrServer);</span>
+                }
+<span class="nc" id="L157">            }</span>
+        };
+    }
+
+    private String[] getEnabledProtocols(final ZKConfig config) {
+<span class="nc" id="L162">        String enabledProtocolsInput = config.getProperty(getSslEnabledProtocolsProperty());</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">        if (enabledProtocolsInput == null) {</span>
+<span class="nc" id="L164">            return null;</span>
+        }
+<span class="nc" id="L166">        return enabledProtocolsInput.split(&quot;,&quot;);</span>
+    }
+
+    private X509Util.ClientAuth getClientAuth(final ZKConfig config) {
+<span class="nc" id="L170">        return X509Util.ClientAuth.fromPropertyValue(config.getProperty(getSslClientAuthProperty()));</span>
+    }
+
+    private Iterable&lt;String&gt; getCipherSuites(final ZKConfig config) {
+<span class="nc" id="L174">        String cipherSuitesInput = config.getProperty(getSslCipherSuitesProperty());</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">        if (cipherSuitesInput == null) {</span>
+<span class="nc" id="L176">            return null;</span>
+        } else {
+<span class="nc" id="L178">            return Arrays.asList(cipherSuitesInput.split(&quot;,&quot;));</span>
+        }
+    }
+
+    public SslProvider getSslProvider(ZKConfig config) {
+<span class="nc" id="L183">        return SslProvider.valueOf(config.getProperty(getSslProviderProperty(), &quot;JDK&quot;));</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

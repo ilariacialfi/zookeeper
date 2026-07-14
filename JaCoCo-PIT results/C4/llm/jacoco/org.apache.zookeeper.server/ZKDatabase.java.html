@@ -1,0 +1,807 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ZKDatabase.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server</a> &gt; <span class="el_source">ZKDatabase.java</span></div><h1>ZKDatabase.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
+import java.util.zip.CheckedInputStream;
+import org.apache.jute.InputArchive;
+import org.apache.jute.OutputArchive;
+import org.apache.jute.Record;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.KeeperException.NoNodeException;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.Watcher.WatcherType;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.common.Time;
+import org.apache.zookeeper.data.ACL;
+import org.apache.zookeeper.data.Stat;
+import org.apache.zookeeper.server.DataTree.ProcessTxnResult;
+import org.apache.zookeeper.server.persistence.FileSnap;
+import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
+import org.apache.zookeeper.server.persistence.FileTxnSnapLog.PlayBackListener;
+import org.apache.zookeeper.server.persistence.SnapStream;
+import org.apache.zookeeper.server.persistence.TxnLog.TxnIterator;
+import org.apache.zookeeper.server.quorum.Leader.Proposal;
+import org.apache.zookeeper.server.quorum.Leader.PureRequestProposal;
+import org.apache.zookeeper.server.quorum.flexible.QuorumVerifier;
+import org.apache.zookeeper.server.util.SerializeUtils;
+import org.apache.zookeeper.server.util.ZxidUtils;
+import org.apache.zookeeper.txn.TxnDigest;
+import org.apache.zookeeper.txn.TxnHeader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * This class maintains the in memory database of zookeeper
+ * server states that includes the sessions, datatree and the
+ * committed logs. It is booted up  after reading the logs
+ * and snapshots from the disk.
+ */
+public class ZKDatabase {
+
+<span class="nc" id="L75">    private static final Logger LOG = LoggerFactory.getLogger(ZKDatabase.class);</span>
+
+    /**
+     * make sure on a clear you take care of
+     * all these members.
+     */
+    protected DataTree dataTree;
+    protected ConcurrentHashMap&lt;Long, Integer&gt; sessionsWithTimeouts;
+    protected FileTxnSnapLog snapLog;
+    protected long minCommittedLog, maxCommittedLog;
+
+<span class="nc" id="L86">    private final boolean allowDiscontinuousProposals = Boolean.getBoolean(&quot;zookeeper.test.allowDiscontinuousProposals&quot;);</span>
+
+    /**
+     * Default value is to use snapshot if txnlog size exceeds 1/3 the size of snapshot
+     */
+    public static final String SNAPSHOT_SIZE_FACTOR = &quot;zookeeper.snapshotSizeFactor&quot;;
+    public static final double DEFAULT_SNAPSHOT_SIZE_FACTOR = 0.33;
+    private double snapshotSizeFactor;
+
+    public static final String COMMIT_LOG_COUNT = &quot;zookeeper.commitLogCount&quot;;
+    public static final int DEFAULT_COMMIT_LOG_COUNT = 500;
+    public int commitLogCount;
+<span class="nc" id="L98">    protected Queue&lt;Proposal&gt; committedLog = new ArrayDeque&lt;&gt;();</span>
+<span class="nc" id="L99">    protected ReentrantReadWriteLock logLock = new ReentrantReadWriteLock();</span>
+<span class="nc" id="L100">    private volatile boolean initialized = false;</span>
+
+    /**
+     * Number of txn since last snapshot;
+     */
+<span class="nc" id="L105">    private AtomicInteger txnCount = new AtomicInteger(0);</span>
+
+    /**
+     * the filetxnsnaplog that this zk database
+     * maps to. There is a one to one relationship
+     * between a filetxnsnaplog and zkdatabase.
+     * @param snapLog the FileTxnSnapLog mapping this zkdatabase
+     */
+<span class="nc" id="L113">    public ZKDatabase(FileTxnSnapLog snapLog) {</span>
+<span class="nc" id="L114">        dataTree = createDataTree();</span>
+<span class="nc" id="L115">        sessionsWithTimeouts = new ConcurrentHashMap&lt;&gt;();</span>
+<span class="nc" id="L116">        this.snapLog = snapLog;</span>
+
+        try {
+<span class="nc" id="L119">            snapshotSizeFactor = Double.parseDouble(</span>
+<span class="nc" id="L120">                    System.getProperty(SNAPSHOT_SIZE_FACTOR,</span>
+<span class="nc" id="L121">                            Double.toString(DEFAULT_SNAPSHOT_SIZE_FACTOR)));</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">            if (snapshotSizeFactor &gt; 1) {</span>
+<span class="nc" id="L123">                snapshotSizeFactor = DEFAULT_SNAPSHOT_SIZE_FACTOR;</span>
+<span class="nc" id="L124">                LOG.warn(</span>
+                    &quot;The configured {} is invalid, going to use the default {}&quot;,
+                    SNAPSHOT_SIZE_FACTOR,
+<span class="nc" id="L127">                    DEFAULT_SNAPSHOT_SIZE_FACTOR);</span>
+            }
+<span class="nc" id="L129">        } catch (NumberFormatException e) {</span>
+<span class="nc" id="L130">            LOG.error(</span>
+                &quot;Error parsing {}, using default value {}&quot;,
+                SNAPSHOT_SIZE_FACTOR,
+<span class="nc" id="L133">                DEFAULT_SNAPSHOT_SIZE_FACTOR);</span>
+<span class="nc" id="L134">            snapshotSizeFactor = DEFAULT_SNAPSHOT_SIZE_FACTOR;</span>
+<span class="nc" id="L135">        }</span>
+
+<span class="nc" id="L137">        LOG.info(&quot;{} = {}&quot;, SNAPSHOT_SIZE_FACTOR, snapshotSizeFactor);</span>
+
+        try {
+<span class="nc" id="L140">            commitLogCount = Integer.parseInt(</span>
+<span class="nc" id="L141">                    System.getProperty(COMMIT_LOG_COUNT,</span>
+<span class="nc" id="L142">                            Integer.toString(DEFAULT_COMMIT_LOG_COUNT)));</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">            if (commitLogCount &lt; DEFAULT_COMMIT_LOG_COUNT) {</span>
+<span class="nc" id="L144">                commitLogCount = DEFAULT_COMMIT_LOG_COUNT;</span>
+<span class="nc" id="L145">                LOG.warn(</span>
+                    &quot;The configured commitLogCount {} is less than the recommended {}, going to use the recommended one&quot;,
+                    COMMIT_LOG_COUNT,
+<span class="nc" id="L148">                    DEFAULT_COMMIT_LOG_COUNT);</span>
+            }
+<span class="nc" id="L150">        } catch (NumberFormatException e) {</span>
+<span class="nc" id="L151">            LOG.error(</span>
+                &quot;Error parsing {} - use default value {}&quot;,
+                COMMIT_LOG_COUNT,
+<span class="nc" id="L154">                DEFAULT_COMMIT_LOG_COUNT);</span>
+<span class="nc" id="L155">            commitLogCount = DEFAULT_COMMIT_LOG_COUNT;</span>
+<span class="nc" id="L156">        }</span>
+<span class="nc" id="L157">        LOG.info(&quot;{}={}&quot;, COMMIT_LOG_COUNT, commitLogCount);</span>
+<span class="nc" id="L158">    }</span>
+
+    /**
+     * checks to see if the zk database has been
+     * initialized or not.
+     * @return true if zk database is initialized and false if not
+     */
+    public boolean isInitialized() {
+<span class="nc" id="L166">        return initialized;</span>
+    }
+
+    /**
+     * clear the zkdatabase.
+     * Note to developers - be careful to see that
+     * the clear method does clear out all the
+     * data structures in zkdatabase.
+     */
+    public void clear() {
+        /* to be safe we just create a new
+         * datatree.
+         */
+<span class="nc" id="L179">        dataTree.shutdownWatcher();</span>
+<span class="nc" id="L180">        dataTree = createDataTree();</span>
+<span class="nc" id="L181">        sessionsWithTimeouts.clear();</span>
+<span class="nc" id="L182">        WriteLock lock = logLock.writeLock();</span>
+        try {
+<span class="nc" id="L184">            lock.lock();</span>
+<span class="nc" id="L185">            committedLog.clear();</span>
+<span class="nc" id="L186">            minCommittedLog = 0;</span>
+<span class="nc" id="L187">            maxCommittedLog = 0;</span>
+        } finally {
+<span class="nc" id="L189">            lock.unlock();</span>
+        }
+<span class="nc" id="L191">        initialized = false;</span>
+<span class="nc" id="L192">    }</span>
+
+    /**
+     * the datatree for this zkdatabase
+     * @return the datatree for this zkdatabase
+     */
+    public DataTree getDataTree() {
+<span class="nc" id="L199">        return this.dataTree;</span>
+    }
+
+    /**
+     * the committed log for this zk database
+     * @return the committed log for this zkdatabase
+     */
+    public long getmaxCommittedLog() {
+<span class="nc" id="L207">        return maxCommittedLog;</span>
+    }
+
+    /**
+     * the minimum committed transaction log
+     * available in memory
+     * @return the minimum committed transaction
+     * log available in memory
+     */
+    public long getminCommittedLog() {
+<span class="nc" id="L217">        return minCommittedLog;</span>
+    }
+    /**
+     * Get the lock that controls the committedLog. If you want to get the pointer to the committedLog, you need
+     * to use this lock to acquire a read lock before calling getCommittedLog()
+     * @return the lock that controls the committed log
+     */
+    public ReentrantReadWriteLock getLogLock() {
+<span class="nc" id="L225">        return logLock;</span>
+    }
+
+    public synchronized Collection&lt;Proposal&gt; getCommittedLog() {
+        final Collection&lt;Proposal&gt; result;
+<span class="nc" id="L230">        ReadLock rl = logLock.readLock();</span>
+        // make a copy if this thread is not already holding a lock
+<span class="nc bnc" id="L232" title="All 2 branches missed.">        if (logLock.getReadHoldCount() &gt; 0) {</span>
+<span class="nc" id="L233">            result = this.committedLog;</span>
+        } else {
+<span class="nc" id="L235">            rl.lock();</span>
+            try {
+<span class="nc" id="L237">                result = new ArrayList&lt;&gt;(this.committedLog);</span>
+            } finally {
+<span class="nc" id="L239">                rl.unlock();</span>
+            }
+        }
+<span class="nc" id="L242">        return Collections.unmodifiableCollection(result);</span>
+    }
+
+    /**
+     * get the last processed zxid from a datatree
+     * @return the last processed zxid of a datatree
+     */
+    public long getDataTreeLastProcessedZxid() {
+<span class="nc" id="L250">        return dataTree.lastProcessedZxid;</span>
+    }
+
+    /**
+     * return the sessions in the datatree
+     * @return the data tree sessions
+     */
+    public Collection&lt;Long&gt; getSessions() {
+<span class="nc" id="L258">        return dataTree.getSessions();</span>
+    }
+
+    /**
+     * @return number of (global) sessions
+     */
+    public long getSessionCount() {
+<span class="nc" id="L265">        return sessionsWithTimeouts.size();</span>
+    }
+
+    /**
+     * get sessions with timeouts
+     * @return the hashmap of sessions with timeouts
+     */
+    public ConcurrentHashMap&lt;Long, Integer&gt; getSessionWithTimeOuts() {
+<span class="nc" id="L273">        return sessionsWithTimeouts;</span>
+    }
+
+<span class="nc" id="L276">    private final PlayBackListener commitProposalPlaybackListener = new PlayBackListener() {</span>
+        public void onTxnLoaded(TxnHeader hdr, Record txn, TxnDigest digest) {
+<span class="nc" id="L278">            addCommittedProposal(hdr, txn, digest);</span>
+<span class="nc" id="L279">        }</span>
+    };
+
+    /**
+     * load the database from the disk onto memory and also add
+     * the transactions to the committedlog in memory.
+     * @return the last valid zxid on disk
+     * @throws IOException
+     */
+    public long loadDataBase() throws IOException {
+<span class="nc" id="L289">        long startTime = Time.currentElapsedTime();</span>
+<span class="nc" id="L290">        long zxid = snapLog.restore(dataTree, sessionsWithTimeouts, commitProposalPlaybackListener);</span>
+<span class="nc" id="L291">        initialized = true;</span>
+<span class="nc" id="L292">        long loadTime = Time.currentElapsedTime() - startTime;</span>
+<span class="nc" id="L293">        ServerMetrics.getMetrics().DB_INIT_TIME.add(loadTime);</span>
+<span class="nc" id="L294">        LOG.info(&quot;Snapshot loaded in {} ms, highest zxid is 0x{}, digest is {}&quot;,</span>
+<span class="nc" id="L295">                loadTime, Long.toHexString(zxid), dataTree.getTreeDigest());</span>
+<span class="nc" id="L296">        return zxid;</span>
+    }
+
+    /**
+     * Fast-forward the database adding transactions from the committed log into memory.
+     * @return the last valid zxid.
+     * @throws IOException
+     */
+    public long fastForwardDataBase() throws IOException {
+<span class="nc" id="L305">        long zxid = snapLog.fastForwardFromEdits(dataTree, sessionsWithTimeouts, commitProposalPlaybackListener);</span>
+<span class="nc" id="L306">        initialized = true;</span>
+<span class="nc" id="L307">        return zxid;</span>
+    }
+
+    private void addCommittedProposal(TxnHeader hdr, Record txn, TxnDigest digest) {
+<span class="nc" id="L311">        Request r = new Request(0, hdr.getCxid(), hdr.getType(), hdr, txn, hdr.getZxid());</span>
+<span class="nc" id="L312">        r.setTxnDigest(digest);</span>
+<span class="nc" id="L313">        addCommittedProposal(r);</span>
+<span class="nc" id="L314">    }</span>
+
+    /**
+     * maintains a list of last &lt;i&gt;committedLog&lt;/i&gt;
+     *  or so committed requests. This is used for
+     * fast follower synchronization.
+     * @param request committed request
+     */
+    public void addCommittedProposal(Request request) {
+<span class="nc" id="L323">        WriteLock wl = logLock.writeLock();</span>
+        try {
+<span class="nc" id="L325">            wl.lock();</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">            if (committedLog.isEmpty()) {</span>
+<span class="nc" id="L327">                minCommittedLog = request.zxid;</span>
+<span class="nc" id="L328">                maxCommittedLog = request.zxid;</span>
+<span class="nc bnc" id="L329" title="All 2 branches missed.">            } else if (request.zxid &lt;= maxCommittedLog) {</span>
+                // This could happen if lastProcessedZxid is rewinded and database is re-synced.
+                // Currently, it only happens in test codes, but it should also be safe for production path.
+<span class="nc" id="L332">                return;</span>
+<span class="nc bnc" id="L333" title="All 4 branches missed.">            } else if (!allowDiscontinuousProposals</span>
+                    &amp;&amp; request.zxid != maxCommittedLog + 1
+<span class="nc bnc" id="L335" title="All 2 branches missed.">                    &amp;&amp; ZxidUtils.getEpochFromZxid(request.zxid) &lt;= ZxidUtils.getEpochFromZxid(maxCommittedLog)) {</span>
+<span class="nc" id="L336">                String msg = String.format(</span>
+                    &quot;Committed proposal cached out of order: 0x%s is not the next proposal of 0x%s&quot;,
+<span class="nc" id="L338">                    ZxidUtils.zxidToString(request.zxid),</span>
+<span class="nc" id="L339">                    ZxidUtils.zxidToString(maxCommittedLog));</span>
+<span class="nc" id="L340">                LOG.error(msg);</span>
+<span class="nc" id="L341">                throw new IllegalStateException(msg);</span>
+            }
+<span class="nc" id="L343">            PureRequestProposal p = new PureRequestProposal(request);</span>
+<span class="nc" id="L344">            committedLog.add(p);</span>
+<span class="nc" id="L345">            maxCommittedLog = p.getZxid();</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">            if (committedLog.size() &gt; commitLogCount) {</span>
+<span class="nc" id="L347">                committedLog.remove();</span>
+<span class="nc" id="L348">                minCommittedLog = committedLog.peek().getZxid();</span>
+            }
+        } finally {
+<span class="nc" id="L351">            wl.unlock();</span>
+        }
+<span class="nc" id="L353">    }</span>
+
+    public boolean isTxnLogSyncEnabled() {
+<span class="nc bnc" id="L356" title="All 2 branches missed.">        boolean enabled = snapshotSizeFactor &gt;= 0;</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">        if (enabled) {</span>
+<span class="nc" id="L358">            LOG.info(&quot;On disk txn sync enabled with snapshotSizeFactor {}&quot;, snapshotSizeFactor);</span>
+        } else {
+<span class="nc" id="L360">            LOG.info(&quot;On disk txn sync disabled&quot;);</span>
+        }
+<span class="nc" id="L362">        return enabled;</span>
+    }
+
+    public long calculateTxnLogSizeLimit() {
+<span class="nc" id="L366">        long snapSize = 0;</span>
+        try {
+<span class="nc" id="L368">            File snapFile = snapLog.findMostRecentSnapshot();</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">            if (snapFile != null) {</span>
+<span class="nc" id="L370">                snapSize = snapFile.length();</span>
+            }
+<span class="nc" id="L372">        } catch (IOException e) {</span>
+<span class="nc" id="L373">            LOG.error(&quot;Unable to get size of most recent snapshot&quot;);</span>
+<span class="nc" id="L374">        }</span>
+<span class="nc" id="L375">        return (long) (snapSize * snapshotSizeFactor);</span>
+    }
+
+    /**
+     * Get proposals from txnlog. Only packet part of proposal is populated.
+     *
+     * @param startZxid the starting zxid of the proposal
+     * @param sizeLimit maximum on-disk size of txnlog to fetch
+     *                  0 is unlimited, negative value means disable.
+     * @return list of proposal (request part of each proposal is null)
+     */
+    public Iterator&lt;Proposal&gt; getProposalsFromTxnLog(long startZxid, long sizeLimit) {
+<span class="nc bnc" id="L387" title="All 2 branches missed.">        if (sizeLimit &lt; 0) {</span>
+<span class="nc" id="L388">            LOG.debug(&quot;Negative size limit - retrieving proposal via txnlog is disabled&quot;);</span>
+<span class="nc" id="L389">            return TxnLogProposalIterator.EMPTY_ITERATOR;</span>
+        }
+
+<span class="nc" id="L392">        TxnIterator itr = null;</span>
+        try {
+
+<span class="nc" id="L395">            itr = snapLog.readTxnLog(startZxid, false);</span>
+
+            // If we cannot guarantee that this is strictly the starting txn
+            // after a given zxid, we should fail.
+<span class="nc bnc" id="L399" title="All 4 branches missed.">            if ((itr.getHeader() != null) &amp;&amp; (itr.getHeader().getZxid() &gt; startZxid)) {</span>
+<span class="nc" id="L400">                LOG.warn(</span>
+                    &quot;Unable to find proposals from txnlog for zxid: 0x{}&quot;,
+<span class="nc" id="L402">                    Long.toHexString(startZxid));</span>
+<span class="nc" id="L403">                itr.close();</span>
+<span class="nc" id="L404">                return TxnLogProposalIterator.EMPTY_ITERATOR;</span>
+            }
+
+<span class="nc bnc" id="L407" title="All 2 branches missed.">            if (sizeLimit &gt; 0) {</span>
+<span class="nc" id="L408">                long txnSize = itr.getStorageSize();</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">                if (txnSize &gt; sizeLimit) {</span>
+<span class="nc" id="L410">                    LOG.info(&quot;Txnlog size: {} exceeds sizeLimit: {}&quot;, txnSize, sizeLimit);</span>
+<span class="nc" id="L411">                    itr.close();</span>
+<span class="nc" id="L412">                    return TxnLogProposalIterator.EMPTY_ITERATOR;</span>
+                }
+            }
+<span class="nc" id="L415">        } catch (IOException e) {</span>
+<span class="nc" id="L416">            LOG.error(&quot;Unable to read txnlog from disk&quot;, e);</span>
+            try {
+<span class="nc bnc" id="L418" title="All 2 branches missed.">                if (itr != null) {</span>
+<span class="nc" id="L419">                    itr.close();</span>
+                }
+<span class="nc" id="L421">            } catch (IOException ioe) {</span>
+<span class="nc" id="L422">                LOG.warn(&quot;Error closing file iterator&quot;, ioe);</span>
+<span class="nc" id="L423">            }</span>
+<span class="nc" id="L424">            return TxnLogProposalIterator.EMPTY_ITERATOR;</span>
+<span class="nc" id="L425">        }</span>
+<span class="nc" id="L426">        return new TxnLogProposalIterator(itr);</span>
+    }
+
+    public List&lt;ACL&gt; aclForNode(DataNode n) {
+<span class="nc" id="L430">        return dataTree.getACL(n);</span>
+    }
+    /**
+     * remove a cnxn from the datatree
+     * @param cnxn the cnxn to remove from the datatree
+     */
+    public void removeCnxn(ServerCnxn cnxn) {
+<span class="nc" id="L437">        dataTree.removeCnxn(cnxn);</span>
+<span class="nc" id="L438">    }</span>
+
+    /**
+     * kill a given session in the datatree
+     * @param sessionId the session id to be killed
+     * @param zxid the zxid of kill session transaction
+     */
+    public void killSession(long sessionId, long zxid) {
+<span class="nc" id="L446">        dataTree.killSession(sessionId, zxid);</span>
+<span class="nc" id="L447">    }</span>
+
+    /**
+     * write a text dump of all the ephemerals in the datatree
+     * @param pwriter the output to write to
+     */
+    public void dumpEphemerals(PrintWriter pwriter) {
+<span class="nc" id="L454">        dataTree.dumpEphemerals(pwriter);</span>
+<span class="nc" id="L455">    }</span>
+
+    public Map&lt;Long, Set&lt;String&gt;&gt; getEphemerals() {
+<span class="nc" id="L458">        return dataTree.getEphemerals();</span>
+    }
+
+    /**
+     * the node count of the datatree
+     * @return the node count of datatree
+     */
+    public int getNodeCount() {
+<span class="nc" id="L466">        return dataTree.getNodeCount();</span>
+    }
+
+    /**
+     * the paths for  ephemeral session id
+     * @param sessionId the session id for which paths match to
+     * @return the paths for a session id
+     */
+    public Set&lt;String&gt; getEphemerals(long sessionId) {
+<span class="nc" id="L475">        return dataTree.getEphemerals(sessionId);</span>
+    }
+
+    /**
+     * the last processed zxid in the datatree
+     * @param zxid the last processed zxid in the datatree
+     */
+    public void setlastProcessedZxid(long zxid) {
+<span class="nc" id="L483">        dataTree.lastProcessedZxid = zxid;</span>
+<span class="nc" id="L484">    }</span>
+
+    /**
+     * the process txn on the data and perform digest comparison.
+     * @param hdr the txnheader for the txn
+     * @param txn the transaction that needs to be processed
+     * @param digest the expected digest. A null value would skip the check
+     * @return the result of processing the transaction on this
+     * datatree/zkdatabase
+     */
+    public ProcessTxnResult processTxn(TxnHeader hdr, Record txn, TxnDigest digest) {
+<span class="nc" id="L495">        return dataTree.processTxn(hdr, txn, digest);</span>
+    }
+
+    /**
+     * stat the path
+     * @param path the path for which stat is to be done
+     * @param serverCnxn the servercnxn attached to this request
+     * @return the stat of this node
+     * @throws KeeperException.NoNodeException
+     */
+    public Stat statNode(String path, ServerCnxn serverCnxn) throws KeeperException.NoNodeException {
+<span class="nc" id="L506">        return dataTree.statNode(path, serverCnxn);</span>
+    }
+
+    /**
+     * get the datanode for this path
+     * @param path the path to lookup
+     * @return the datanode for getting the path
+     */
+    public DataNode getNode(String path) {
+<span class="nc" id="L515">        return dataTree.getNode(path);</span>
+    }
+
+    /**
+     * get data and stat for a path
+     * @param path the path being queried
+     * @param stat the stat for this path
+     * @param watcher the watcher function
+     * @throws KeeperException.NoNodeException
+     */
+    public byte[] getData(String path, Stat stat, Watcher watcher) throws KeeperException.NoNodeException {
+<span class="nc" id="L526">        return dataTree.getData(path, stat, watcher);</span>
+    }
+
+    /**
+     * set watches on the datatree
+     * @param relativeZxid the relative zxid that client has seen
+     * @param dataWatches the data watches the client wants to reset
+     * @param existWatches the exists watches the client wants to reset
+     * @param childWatches the child watches the client wants to reset
+     * @param persistentWatches the persistent watches the client wants to reset
+     * @param persistentRecursiveWatches the persistent recursive watches the client wants to reset
+     * @param watcher the watcher function
+     */
+    public void setWatches(long relativeZxid, List&lt;String&gt; dataWatches, List&lt;String&gt; existWatches, List&lt;String&gt; childWatches,
+                           List&lt;String&gt; persistentWatches, List&lt;String&gt; persistentRecursiveWatches, Watcher watcher) {
+<span class="nc" id="L541">        dataTree.setWatches(relativeZxid, dataWatches, existWatches, childWatches, persistentWatches, persistentRecursiveWatches, watcher);</span>
+<span class="nc" id="L542">    }</span>
+
+    /**
+     * Add a watch
+     *
+     * @param basePath
+     *            watch base
+     * @param watcher
+     *            the watcher
+     * @param mode
+     *            a mode from ZooDefs.AddWatchModes
+     */
+    public void addWatch(String basePath, Watcher watcher, int mode) {
+<span class="nc" id="L555">        dataTree.addWatch(basePath, watcher, mode);</span>
+<span class="nc" id="L556">    }</span>
+
+    /**
+     * get acl for a path
+     * @param path the path to query for acl
+     * @param stat the stat for the node
+     * @return the acl list for this path
+     * @throws NoNodeException
+     */
+    public List&lt;ACL&gt; getACL(String path, Stat stat) throws NoNodeException {
+<span class="nc" id="L566">        return dataTree.getACL(path, stat);</span>
+    }
+
+    /**
+     * get children list for this path
+     * @param path the path of the node
+     * @param stat the stat of the node
+     * @param watcher the watcher function for this path
+     * @return the list of children for this path
+     * @throws KeeperException.NoNodeException
+     */
+    public List&lt;String&gt; getChildren(String path, Stat stat, Watcher watcher) throws KeeperException.NoNodeException {
+<span class="nc" id="L578">        return dataTree.getChildren(path, stat, watcher);</span>
+    }
+
+    /*
+     * get all sub-children number of this node
+     * */
+    public int getAllChildrenNumber(String path) throws KeeperException.NoNodeException {
+<span class="nc" id="L585">        return dataTree.getAllChildrenNumber(path);</span>
+    }
+
+    /**
+     * check if the path is special or not
+     * @param path the input path
+     * @return true if path is special and false if not
+     */
+    public boolean isSpecialPath(String path) {
+<span class="nc" id="L594">        return dataTree.isSpecialPath(path);</span>
+    }
+
+    /**
+     * get the acl size of the datatree
+     * @return the acl size of the datatree
+     */
+    public int getAclSize() {
+<span class="nc" id="L602">        return dataTree.aclCacheSize();</span>
+    }
+
+    /**
+     * Truncate the ZKDatabase to the specified zxid
+     * @param zxid the zxid to truncate zk database to
+     * @return true if the truncate is successful and false if not
+     * @throws IOException
+     */
+    public boolean truncateLog(long zxid) throws IOException {
+<span class="nc" id="L612">        clear();</span>
+
+        // truncate the log
+<span class="nc" id="L615">        boolean truncated = snapLog.truncateLog(zxid);</span>
+
+<span class="nc bnc" id="L617" title="All 2 branches missed.">        if (!truncated) {</span>
+<span class="nc" id="L618">            return false;</span>
+        }
+
+<span class="nc" id="L621">        loadDataBase();</span>
+<span class="nc" id="L622">        return true;</span>
+    }
+
+    /**
+     * deserialize a snapshot from an input archive
+     * @param ia the input archive you want to deserialize from
+     * @throws IOException
+     */
+    public void deserializeSnapshot(InputArchive ia) throws IOException {
+<span class="nc" id="L631">        clear();</span>
+<span class="nc" id="L632">        SerializeUtils.deserializeSnapshot(getDataTree(), ia, getSessionWithTimeOuts());</span>
+<span class="nc" id="L633">        initialized = true;</span>
+<span class="nc" id="L634">    }</span>
+
+    /**
+     * Deserialize a snapshot that contains FileHeader from an input archive. It is used by
+     * the admin restore command.
+     *
+     * @param ia the input archive to deserialize from
+     * @param is the CheckInputStream to check integrity
+     *
+     * @throws IOException
+     */
+    public void deserializeSnapshot(final InputArchive ia, final CheckedInputStream is) throws IOException {
+<span class="nc" id="L646">        clear();</span>
+
+        // deserialize data tree
+<span class="nc" id="L649">        final DataTree dataTree = getDataTree();</span>
+<span class="nc" id="L650">        FileSnap.deserialize(dataTree, getSessionWithTimeOuts(), ia);</span>
+<span class="nc" id="L651">        SnapStream.checkSealIntegrity(is, ia);</span>
+
+        // deserialize digest and check integrity
+<span class="nc bnc" id="L654" title="All 2 branches missed.">        if (dataTree.deserializeZxidDigest(ia, 0)) {</span>
+<span class="nc" id="L655">            SnapStream.checkSealIntegrity(is, ia);</span>
+        }
+
+        // deserialize lastProcessedZxid and check integrity
+<span class="nc bnc" id="L659" title="All 2 branches missed.">        if (dataTree.deserializeLastProcessedZxid(ia)) {</span>
+<span class="nc" id="L660">            SnapStream.checkSealIntegrity(is, ia);</span>
+        }
+
+        // compare the digest to find inconsistency
+<span class="nc bnc" id="L664" title="All 2 branches missed.">        if (dataTree.getDigestFromLoadedSnapshot() != null) {</span>
+<span class="nc" id="L665">            dataTree.compareSnapshotDigests(dataTree.lastProcessedZxid);</span>
+        }
+
+<span class="nc" id="L668">        initialized = true;</span>
+<span class="nc" id="L669">    }</span>
+
+
+    /**
+     * serialize the snapshot
+     * @param oa the output archive to which the snapshot needs to be serialized
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    public void serializeSnapshot(OutputArchive oa) throws IOException, InterruptedException {
+<span class="nc" id="L679">        SerializeUtils.serializeSnapshot(getDataTree(), oa, getSessionWithTimeOuts());</span>
+<span class="nc" id="L680">    }</span>
+
+    /**
+     * append to the underlying transaction log
+     * @param si the request to append
+     * @return true if the append was successful and false if not
+     */
+    public boolean append(Request si) throws IOException {
+<span class="nc bnc" id="L688" title="All 2 branches missed.">        if (this.snapLog.append(si)) {</span>
+<span class="nc" id="L689">            txnCount.incrementAndGet();</span>
+<span class="nc" id="L690">            return true;</span>
+        }
+<span class="nc" id="L692">        return false;</span>
+    }
+
+    /**
+     * roll the underlying log
+     */
+    public void rollLog() throws IOException {
+<span class="nc" id="L699">        this.snapLog.rollLog();</span>
+<span class="nc" id="L700">        resetTxnCount();</span>
+<span class="nc" id="L701">    }</span>
+
+    /**
+     * commit to the underlying transaction log
+     * @throws IOException
+     */
+    public void commit() throws IOException {
+<span class="nc" id="L708">        this.snapLog.commit();</span>
+<span class="nc" id="L709">    }</span>
+
+    /**
+     * close this database. free the resources
+     * @throws IOException
+     */
+    public void close() throws IOException {
+<span class="nc" id="L716">        this.snapLog.close();</span>
+<span class="nc" id="L717">    }</span>
+
+    public synchronized void initConfigInZKDatabase(QuorumVerifier qv) {
+<span class="nc bnc" id="L720" title="All 2 branches missed.">        if (qv == null) {</span>
+<span class="nc" id="L721">            return; // only happens during tests</span>
+        }
+        try {
+<span class="nc bnc" id="L724" title="All 2 branches missed.">            if (this.dataTree.getNode(ZooDefs.CONFIG_NODE) == null) {</span>
+                // should only happen during upgrade
+<span class="nc" id="L726">                LOG.warn(&quot;configuration znode missing (should only happen during upgrade), creating the node&quot;);</span>
+<span class="nc" id="L727">                this.dataTree.addConfigNode();</span>
+            }
+<span class="nc" id="L729">            this.dataTree.setData(</span>
+                ZooDefs.CONFIG_NODE,
+<span class="nc" id="L731">                qv.toString().getBytes(UTF_8),</span>
+                -1,
+<span class="nc" id="L733">                qv.getVersion(),</span>
+<span class="nc" id="L734">                Time.currentWallTime());</span>
+<span class="nc" id="L735">        } catch (NoNodeException e) {</span>
+<span class="nc" id="L736">            System.out.println(&quot;configuration node missing - should not happen&quot;);</span>
+<span class="nc" id="L737">        }</span>
+<span class="nc" id="L738">    }</span>
+
+    /**
+     * Use for unit testing, so we can turn this feature on/off
+     * @param snapshotSizeFactor Set to minus value to turn this off.
+     */
+    public void setSnapshotSizeFactor(double snapshotSizeFactor) {
+<span class="nc" id="L745">        this.snapshotSizeFactor = snapshotSizeFactor;</span>
+<span class="nc" id="L746">    }</span>
+
+    /**
+     * Check whether the given watcher exists in datatree
+     *
+     * @param path
+     *            node to check watcher existence
+     * @param type
+     *            type of watcher
+     * @param watcher
+     *            watcher function
+     */
+    public boolean containsWatcher(String path, WatcherType type, Watcher watcher) {
+<span class="nc" id="L759">        return dataTree.containsWatcher(path, type, watcher);</span>
+    }
+
+    /**
+     * Remove watch from the datatree
+     *
+     * @param path
+     *            node to remove watches from
+     * @param type
+     *            type of watcher to remove
+     * @param watcher
+     *            watcher function to remove
+     */
+    public boolean removeWatch(String path, WatcherType type, Watcher watcher) {
+<span class="nc" id="L773">        return dataTree.removeWatch(path, type, watcher);</span>
+    }
+
+    // visible for testing
+    public DataTree createDataTree() {
+<span class="nc" id="L778">        return new DataTree();</span>
+    }
+
+    /**
+     * Reset the number of txn since last rollLog
+     */
+    public void resetTxnCount() {
+<span class="nc" id="L785">        txnCount.set(0);</span>
+<span class="nc" id="L786">        snapLog.setTotalLogSize(0);</span>
+<span class="nc" id="L787">    }</span>
+
+    /**
+     * Get the number of txn since last snapshot
+     */
+    public int getTxnCount() {
+<span class="nc" id="L793">        return txnCount.get();</span>
+    }
+
+    /**
+     * Get the size of txn since last snapshot
+     */
+    public long getTxnSize() {
+<span class="nc" id="L800">        return snapLog.getTotalLogSize();</span>
+    }
+
+    public boolean compareDigest(TxnHeader header, Record txn, TxnDigest digest) {
+<span class="nc" id="L804">        return dataTree.compareDigest(header, txn, digest);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

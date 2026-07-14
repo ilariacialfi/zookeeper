@@ -1,0 +1,30 @@
+# Created at 2026-07-14T14:18:40.742
+Corrupted STDOUT by directly writing to native stream in forked JVM 2. Stream 'Error occurred during initialization of VM'.
+java.lang.IllegalArgumentException: Stream stdin corrupted. Expected comma after third character in command 'Error occurred during initialization of VM'.
+	at org.apache.maven.plugin.surefire.booterclient.output.ForkClient$OperationalData.<init>(ForkClient.java:507)
+	at org.apache.maven.plugin.surefire.booterclient.output.ForkClient.processLine(ForkClient.java:210)
+	at org.apache.maven.plugin.surefire.booterclient.output.ForkClient.consumeLine(ForkClient.java:177)
+	at org.apache.maven.plugin.surefire.booterclient.output.ThreadedStreamConsumer$Pumper.run(ThreadedStreamConsumer.java:88)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+
+# Created at 2026-07-14T14:18:40.749
+Corrupted STDOUT by directly writing to native stream in forked JVM 2. Stream 'java.lang.Error: A command line option has attempted to allow or enable the Security Manager. Enabling a Security Manager is not supported.'.
+java.lang.IllegalArgumentException: Stream stdin corrupted. Expected comma after third character in command 'java.lang.Error: A command line option has attempted to allow or enable the Security Manager. Enabling a Security Manager is not supported.'.
+	at org.apache.maven.plugin.surefire.booterclient.output.ForkClient$OperationalData.<init>(ForkClient.java:507)
+	at org.apache.maven.plugin.surefire.booterclient.output.ForkClient.processLine(ForkClient.java:210)
+	at org.apache.maven.plugin.surefire.booterclient.output.ForkClient.consumeLine(ForkClient.java:177)
+	at org.apache.maven.plugin.surefire.booterclient.output.ThreadedStreamConsumer$Pumper.run(ThreadedStreamConsumer.java:88)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+
+# Created at 2026-07-14T14:18:40.750
+Corrupted STDOUT by directly writing to native stream in forked JVM 2. Stream '	at java.lang.System.initPhase3(java.base@25.0.3/System.java:1970)'.
+java.lang.IllegalArgumentException: Stream stdin corrupted. Expected comma after third character in command '	at java.lang.System.initPhase3(java.base@25.0.3/System.java:1970)'.
+	at org.apache.maven.plugin.surefire.booterclient.output.ForkClient$OperationalData.<init>(ForkClient.java:507)
+	at org.apache.maven.plugin.surefire.booterclient.output.ForkClient.processLine(ForkClient.java:210)
+	at org.apache.maven.plugin.surefire.booterclient.output.ForkClient.consumeLine(ForkClient.java:177)
+	at org.apache.maven.plugin.surefire.booterclient.output.ThreadedStreamConsumer$Pumper.run(ThreadedStreamConsumer.java:88)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+

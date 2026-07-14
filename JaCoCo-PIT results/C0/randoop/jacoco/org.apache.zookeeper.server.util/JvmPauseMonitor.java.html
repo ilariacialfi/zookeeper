@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JvmPauseMonitor.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.server.util</a> &gt; <span class="el_source">JvmPauseMonitor.java</span></div><h1>JvmPauseMonitor.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.server.util;
+
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+import org.apache.zookeeper.server.ServerConfig;
+import org.apache.zookeeper.server.ServerMetrics;
+import org.apache.zookeeper.server.quorum.QuorumPeerConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * This code is originally from hadoop-common, see:
+ * https://github.com/apache/hadoop/blob/trunk/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/util/JvmPauseMonitor.java
+ *
+ * Class which sets up a simple thread which runs in a loop sleeping
+ * for a short interval of time. If the sleep takes significantly longer
+ * than its target time, it implies that the JVM or host machine has
+ * paused processing, which may cause other problems. If such a pause is
+ * detected, the thread logs a message.
+ */
+public class JvmPauseMonitor {
+
+<span class="nc" id="L49">    private static final Logger LOG = LoggerFactory.getLogger(JvmPauseMonitor.class);</span>
+
+    public static final String JVM_PAUSE_MONITOR_FEATURE_SWITCH_KEY = &quot;jvm.pause.monitor&quot;;
+
+    /** The target sleep time */
+    protected long sleepTimeMs;
+    public static final String SLEEP_TIME_MS_KEY = &quot;jvm.pause.sleep.time.ms&quot;;
+    public static final long SLEEP_TIME_MS_DEFAULT = 500;
+
+    /** log WARN if we detect a pause longer than this threshold */
+    protected long warnThresholdMs;
+    public static final String WARN_THRESHOLD_KEY = &quot;jvm.pause.warn-threshold.ms&quot;;
+    public static final long WARN_THRESHOLD_DEFAULT = 10000;
+
+    /** log INFO if we detect a pause longer than this threshold */
+    protected long infoThresholdMs;
+    public static final String INFO_THRESHOLD_KEY = &quot;jvm.pause.info-threshold.ms&quot;;
+    public static final long INFO_THRESHOLD_DEFAULT = 1000;
+
+<span class="nc" id="L68">    private final AtomicLong numGcWarnThresholdExceeded = new AtomicLong(0);</span>
+<span class="nc" id="L69">    private final AtomicLong numGcInfoThresholdExceeded = new AtomicLong(0);</span>
+<span class="nc" id="L70">    private final AtomicLong totalGcExtraSleepTime = new AtomicLong(0);</span>
+
+    private Thread monitorThread;
+<span class="nc" id="L73">    private volatile boolean shouldRun = true;</span>
+
+<span class="nc" id="L75">    public JvmPauseMonitor(QuorumPeerConfig config) {</span>
+<span class="nc" id="L76">        this.warnThresholdMs = config.getJvmPauseWarnThresholdMs();</span>
+<span class="nc" id="L77">        this.infoThresholdMs = config.getJvmPauseInfoThresholdMs();</span>
+<span class="nc" id="L78">        this.sleepTimeMs = config.getJvmPauseSleepTimeMs();</span>
+<span class="nc" id="L79">    }</span>
+
+<span class="nc" id="L81">    public JvmPauseMonitor(ServerConfig config) {</span>
+<span class="nc" id="L82">        this.warnThresholdMs = config.getJvmPauseWarnThresholdMs();</span>
+<span class="nc" id="L83">        this.infoThresholdMs = config.getJvmPauseInfoThresholdMs();</span>
+<span class="nc" id="L84">        this.sleepTimeMs = config.getJvmPauseSleepTimeMs();</span>
+<span class="nc" id="L85">    }</span>
+
+    public void serviceStart() {
+<span class="nc" id="L88">        monitorThread = new Thread(new JVMMonitor());</span>
+<span class="nc" id="L89">        monitorThread.setDaemon(true);</span>
+<span class="nc" id="L90">        monitorThread.start();</span>
+<span class="nc" id="L91">    }</span>
+
+    public void serviceStop() {
+<span class="nc" id="L94">        shouldRun = false;</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        if (monitorThread != null) {</span>
+<span class="nc" id="L96">            monitorThread.interrupt();</span>
+            try {
+<span class="nc" id="L98">                monitorThread.join();</span>
+<span class="nc" id="L99">            } catch (InterruptedException e) {</span>
+<span class="nc" id="L100">                Thread.currentThread().interrupt();</span>
+<span class="nc" id="L101">            }</span>
+        }
+<span class="nc" id="L103">    }</span>
+
+    public boolean isStarted() {
+<span class="nc bnc" id="L106" title="All 2 branches missed.">        return monitorThread != null;</span>
+    }
+
+    public long getNumGcWarnThresholdExceeded() {
+<span class="nc" id="L110">        return numGcWarnThresholdExceeded.get();</span>
+    }
+
+    public long getNumGcInfoThresholdExceeded() {
+<span class="nc" id="L114">        return numGcInfoThresholdExceeded.get();</span>
+    }
+
+    public long getTotalGcExtraSleepTime() {
+<span class="nc" id="L118">        return totalGcExtraSleepTime.get();</span>
+    }
+
+    private String formatMessage(long extraSleepTime, Map&lt;String, GcTimes&gt; gcTimesAfterSleep, Map&lt;String, GcTimes&gt; gcTimesBeforeSleep) {
+
+<span class="nc" id="L123">        Set&lt;String&gt; gcBeanNames = new HashSet&lt;&gt;(gcTimesAfterSleep.keySet());</span>
+<span class="nc" id="L124">        gcBeanNames.retainAll(gcTimesBeforeSleep.keySet());</span>
+<span class="nc" id="L125">        List&lt;String&gt; gcDiffs = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        for (String name : gcBeanNames) {</span>
+<span class="nc" id="L128">            GcTimes diff = gcTimesAfterSleep.get(name).subtract(gcTimesBeforeSleep.get(name));</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">            if (diff.gcCount != 0) {</span>
+<span class="nc" id="L130">                gcDiffs.add(&quot;GC pool '&quot; + name + &quot;' had collection(s): &quot; + diff.toString());</span>
+            }
+<span class="nc" id="L132">        }</span>
+
+<span class="nc" id="L134">        String ret = String.format(&quot;Detected pause in JVM or host machine (eg GC): pause of approximately %d ms, &quot;</span>
+                                   + &quot;total pause: info level: %d, warn level: %d %n&quot;,
+<span class="nc" id="L136">                                   extraSleepTime,</span>
+<span class="nc" id="L137">                                   numGcInfoThresholdExceeded.get(),</span>
+<span class="nc" id="L138">                                   numGcWarnThresholdExceeded.get());</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">        if (gcDiffs.isEmpty()) {</span>
+<span class="nc" id="L140">            ret += (&quot;No GCs detected&quot;);</span>
+        } else {
+<span class="nc" id="L142">            ret += String.join(&quot;\n&quot;, gcDiffs);</span>
+        }
+<span class="nc" id="L144">        return ret;</span>
+    }
+
+    private Map&lt;String, GcTimes&gt; getGcTimes() {
+<span class="nc" id="L148">        Map&lt;String, GcTimes&gt; map = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L149">        List&lt;GarbageCollectorMXBean&gt; gcBeans = ManagementFactory.getGarbageCollectorMXBeans();</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">        for (GarbageCollectorMXBean gcBean : gcBeans) {</span>
+<span class="nc" id="L151">            map.put(gcBean.getName(), new GcTimes(gcBean));</span>
+<span class="nc" id="L152">        }</span>
+<span class="nc" id="L153">        return map;</span>
+    }
+
+    private static class GcTimes {
+
+        private long gcCount;
+        private long gcTimeMillis;
+
+<span class="nc" id="L161">        private GcTimes(GarbageCollectorMXBean gcBean) {</span>
+<span class="nc" id="L162">            gcCount = gcBean.getCollectionCount();</span>
+<span class="nc" id="L163">            gcTimeMillis = gcBean.getCollectionTime();</span>
+<span class="nc" id="L164">        }</span>
+
+<span class="nc" id="L166">        private GcTimes(long count, long time) {</span>
+<span class="nc" id="L167">            this.gcCount = count;</span>
+<span class="nc" id="L168">            this.gcTimeMillis = time;</span>
+<span class="nc" id="L169">        }</span>
+
+        private GcTimes subtract(GcTimes other) {
+<span class="nc" id="L172">            return new GcTimes(this.gcCount - other.gcCount, this.gcTimeMillis - other.gcTimeMillis);</span>
+        }
+
+        public String toString() {
+<span class="nc" id="L176">            return &quot;count=&quot; + gcCount + &quot; time=&quot; + gcTimeMillis + &quot;ms&quot;;</span>
+        }
+
+    }
+
+<span class="nc" id="L181">    private class JVMMonitor implements Runnable {</span>
+
+        @Override
+        public void run() {
+<span class="nc" id="L185">            Map&lt;String, GcTimes&gt; gcTimesBeforeSleep = getGcTimes();</span>
+<span class="nc" id="L186">            LOG.info(&quot;Starting JVM Pause Monitor with infoThresholdMs:{} warnThresholdMs:{} and sleepTimeMs:{}&quot;, infoThresholdMs, warnThresholdMs, sleepTimeMs);</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">            while (shouldRun) {</span>
+<span class="nc" id="L188">                long startTime = Instant.now().toEpochMilli();</span>
+                try {
+<span class="nc" id="L190">                    Thread.sleep(sleepTimeMs);</span>
+<span class="nc" id="L191">                } catch (InterruptedException ie) {</span>
+<span class="nc" id="L192">                    return;</span>
+<span class="nc" id="L193">                }</span>
+<span class="nc" id="L194">                long endTime = Instant.now().toEpochMilli();</span>
+<span class="nc" id="L195">                long extraSleepTime = (endTime - startTime) - sleepTimeMs;</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">                if (extraSleepTime &gt;= 0) {</span>
+<span class="nc" id="L197">                    ServerMetrics.getMetrics().JVM_PAUSE_TIME.add(extraSleepTime);</span>
+                }
+<span class="nc" id="L199">                Map&lt;String, GcTimes&gt; gcTimesAfterSleep = getGcTimes();</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">                if (extraSleepTime &gt; warnThresholdMs) {</span>
+<span class="nc" id="L201">                    numGcWarnThresholdExceeded.incrementAndGet();</span>
+<span class="nc" id="L202">                    LOG.warn(formatMessage(extraSleepTime, gcTimesAfterSleep, gcTimesBeforeSleep));</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">                } else if (extraSleepTime &gt; infoThresholdMs) {</span>
+<span class="nc" id="L204">                    numGcInfoThresholdExceeded.incrementAndGet();</span>
+<span class="nc" id="L205">                    LOG.info(formatMessage(extraSleepTime, gcTimesAfterSleep, gcTimesBeforeSleep));</span>
+                }
+<span class="nc" id="L207">                totalGcExtraSleepTime.addAndGet(extraSleepTime);</span>
+<span class="nc" id="L208">                gcTimesBeforeSleep = gcTimesAfterSleep;</span>
+<span class="nc" id="L209">            }</span>
+<span class="nc" id="L210">        }</span>
+
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

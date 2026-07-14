@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ProtocolManager.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache ZooKeeper - Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.zookeeper.compat</a> &gt; <span class="el_source">ProtocolManager.java</span></div><h1>ProtocolManager.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.zookeeper.compat;
+
+import java.io.IOException;
+import org.apache.jute.InputArchive;
+import org.apache.jute.OutputArchive;
+import org.apache.zookeeper.proto.ConnectRequest;
+import org.apache.zookeeper.proto.ConnectResponse;
+
+/**
+ * A manager for switching behaviours between difference wire protocol.
+ * &lt;p&gt;
+ * Basically, wire protocol should be backward and forward compatible between minor versions.
+ * However, there are several cases that it's different due to Jute's limitations.
+ */
+<span class="nc" id="L33">public final class ProtocolManager {</span>
+<span class="nc" id="L34">    private volatile Boolean isReadonlyAvailable = null;</span>
+
+    public boolean isReadonlyAvailable() {
+<span class="nc bnc" id="L37" title="All 4 branches missed.">        return isReadonlyAvailable != null &amp;&amp; isReadonlyAvailable;</span>
+    }
+
+    /**
+     * Deserializing {@link ConnectRequest} should be specially handled for request from client
+     * version before and including ZooKeeper 3.3 which doesn't understand readOnly field.
+     */
+    public ConnectRequest deserializeConnectRequest(InputArchive inputArchive) throws IOException {
+<span class="nc bnc" id="L45" title="All 2 branches missed.">        if (isReadonlyAvailable != null) {</span>
+<span class="nc bnc" id="L46" title="All 2 branches missed.">            if (isReadonlyAvailable) {</span>
+<span class="nc" id="L47">                return deserializeConnectRequestWithReadonly(inputArchive);</span>
+            } else {
+<span class="nc" id="L49">                return deserializeConnectRequestWithoutReadonly(inputArchive);</span>
+            }
+        }
+
+<span class="nc" id="L53">        final ConnectRequest request = deserializeConnectRequestWithoutReadonly(inputArchive);</span>
+        try {
+<span class="nc" id="L55">            request.setReadOnly(inputArchive.readBool(&quot;readOnly&quot;));</span>
+<span class="nc" id="L56">            this.isReadonlyAvailable = true;</span>
+<span class="nc" id="L57">        } catch (Exception e) {</span>
+<span class="nc" id="L58">            request.setReadOnly(false); // old version doesn't have readonly concept</span>
+<span class="nc" id="L59">            this.isReadonlyAvailable = false;</span>
+<span class="nc" id="L60">        }</span>
+<span class="nc" id="L61">        return request;</span>
+    }
+
+    private ConnectRequest deserializeConnectRequestWithReadonly(InputArchive inputArchive) throws IOException {
+<span class="nc" id="L65">        final ConnectRequest request = new ConnectRequest();</span>
+<span class="nc" id="L66">        request.deserialize(inputArchive, &quot;connect&quot;);</span>
+<span class="nc" id="L67">        return request;</span>
+    }
+
+    private ConnectRequest deserializeConnectRequestWithoutReadonly(InputArchive inputArchive) throws IOException {
+<span class="nc" id="L71">        final ConnectRequest request = new ConnectRequest();</span>
+<span class="nc" id="L72">        inputArchive.startRecord(&quot;connect&quot;);</span>
+<span class="nc" id="L73">        request.setProtocolVersion(inputArchive.readInt(&quot;protocolVersion&quot;));</span>
+<span class="nc" id="L74">        request.setLastZxidSeen(inputArchive.readLong(&quot;lastZxidSeen&quot;));</span>
+<span class="nc" id="L75">        request.setTimeOut(inputArchive.readInt(&quot;timeOut&quot;));</span>
+<span class="nc" id="L76">        request.setSessionId(inputArchive.readLong(&quot;sessionId&quot;));</span>
+<span class="nc" id="L77">        request.setPasswd(inputArchive.readBuffer(&quot;passwd&quot;));</span>
+<span class="nc" id="L78">        inputArchive.endRecord(&quot;connect&quot;);</span>
+<span class="nc" id="L79">        return request;</span>
+    }
+
+    /**
+     * Deserializing {@link ConnectResponse} should be specially handled for response from server
+     * version before and including ZooKeeper 3.3 which doesn't understand readOnly field.
+     */
+    public ConnectResponse deserializeConnectResponse(InputArchive inputArchive) throws IOException {
+<span class="nc bnc" id="L87" title="All 2 branches missed.">        if (isReadonlyAvailable != null) {</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">            if (isReadonlyAvailable) {</span>
+<span class="nc" id="L89">                return deserializeConnectResponseWithReadonly(inputArchive);</span>
+            } else {
+<span class="nc" id="L91">                return deserializeConnectResponseWithoutReadonly(inputArchive);</span>
+            }
+        }
+
+<span class="nc" id="L95">        final ConnectResponse response = deserializeConnectResponseWithoutReadonly(inputArchive);</span>
+        try {
+<span class="nc" id="L97">            response.setReadOnly(inputArchive.readBool(&quot;readOnly&quot;));</span>
+<span class="nc" id="L98">            this.isReadonlyAvailable = true;</span>
+<span class="nc" id="L99">        } catch (Exception e) {</span>
+<span class="nc" id="L100">            response.setReadOnly(false); // old version doesn't have readonly concept</span>
+<span class="nc" id="L101">            this.isReadonlyAvailable = false;</span>
+<span class="nc" id="L102">        }</span>
+<span class="nc" id="L103">        return response;</span>
+    }
+
+    private ConnectResponse deserializeConnectResponseWithReadonly(InputArchive inputArchive) throws IOException {
+<span class="nc" id="L107">        final ConnectResponse response = new ConnectResponse();</span>
+<span class="nc" id="L108">        response.deserialize(inputArchive, &quot;connect&quot;);</span>
+<span class="nc" id="L109">        return response;</span>
+    }
+
+    private ConnectResponse deserializeConnectResponseWithoutReadonly(InputArchive inputArchive) throws IOException {
+<span class="nc" id="L113">        final ConnectResponse response = new ConnectResponse();</span>
+<span class="nc" id="L114">        inputArchive.startRecord(&quot;connect&quot;);</span>
+<span class="nc" id="L115">        response.setProtocolVersion(inputArchive.readInt(&quot;protocolVersion&quot;));</span>
+<span class="nc" id="L116">        response.setTimeOut(inputArchive.readInt(&quot;timeOut&quot;));</span>
+<span class="nc" id="L117">        response.setSessionId(inputArchive.readLong(&quot;sessionId&quot;));</span>
+<span class="nc" id="L118">        response.setPasswd(inputArchive.readBuffer(&quot;passwd&quot;));</span>
+<span class="nc" id="L119">        inputArchive.endRecord(&quot;connect&quot;);</span>
+<span class="nc" id="L120">        return response;</span>
+    }
+
+    /**
+     * The serialization of {@link ConnectResponse} has to be handled
+     * specially as clients earlier than 3.5 might not expect the
+     * {@code readOnly} flag.
+     *
+     * @param response the response to serialize
+     * @param outputArchive the serialization destination
+     * @see #deserializeConnectRequest(InputArchive)
+     */
+    public void serializeConnectResponse(final ConnectResponse response, OutputArchive outputArchive) throws IOException {
+<span class="nc" id="L133">        serializeConnectResponse(response, outputArchive, isReadonlyAvailable());</span>
+<span class="nc" id="L134">    }</span>
+
+    private static void serializeConnectResponse(final ConnectResponse response, OutputArchive outputArchive, boolean withReadonly) throws IOException {
+<span class="nc bnc" id="L137" title="All 2 branches missed.">        if (withReadonly) {</span>
+<span class="nc" id="L138">            serializeConnectResponseWithReadonly(response, outputArchive);</span>
+        } else {
+<span class="nc" id="L140">            serializeConnectResponseWithoutReadonly(response, outputArchive);</span>
+        }
+<span class="nc" id="L142">    }</span>
+
+    private static void serializeConnectResponseWithReadonly(ConnectResponse response, OutputArchive outputArchive) throws IOException {
+<span class="nc" id="L145">        response.serialize(outputArchive, &quot;connect&quot;);</span>
+<span class="nc" id="L146">    }</span>
+
+    private static void serializeConnectResponseWithoutReadonly(ConnectResponse response, OutputArchive outputArchive) throws IOException {
+<span class="nc" id="L149">        outputArchive.startRecord(response, &quot;connect&quot;);</span>
+<span class="nc" id="L150">        outputArchive.writeInt(response.getProtocolVersion(), &quot;protocolVersion&quot;);</span>
+<span class="nc" id="L151">        outputArchive.writeInt(response.getTimeOut(), &quot;timeOut&quot;);</span>
+<span class="nc" id="L152">        outputArchive.writeLong(response.getSessionId(), &quot;sessionId&quot;);</span>
+<span class="nc" id="L153">        outputArchive.writeBuffer(response.getPasswd(), &quot;passwd&quot;);</span>
+<span class="nc" id="L154">        outputArchive.endRecord(response, &quot;connect&quot;);</span>
+<span class="nc" id="L155">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

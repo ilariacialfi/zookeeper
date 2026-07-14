@@ -1,0 +1,6 @@
+14:15:40.090 [main] INFO org.evosuite.runtime.instrumentation.EvoClassLoader -- Seeing class for first time: org.apache.zookeeper.test.evosuite.c0.keeperexception.KeeperException_ESTest
+14:15:40.138 [main] INFO org.evosuite.runtime.instrumentation.EvoClassLoader -- Instrumenting class 'org.apache.zookeeper.test.evosuite.c0.keeperexception.KeeperException_ESTest'.
+14:15:40.539 [main] INFO org.evosuite.runtime.instrumentation.EvoClassLoader -- Seeing class for first time: org.apache.zookeeper.test.evosuite.c0.keeperexception.KeeperException_ESTest_scaffolding
+14:15:40.570 [main] INFO org.evosuite.runtime.instrumentation.EvoClassLoader -- Instrumenting class 'org.apache.zookeeper.test.evosuite.c0.keeperexception.KeeperException_ESTest_scaffolding'.
+14:15:40.591 [main] INFO org.evosuite.runtime.instrumentation.EvoClassLoader -- Keeping class: org.apache.zookeeper.test.evosuite.c0.keeperexception.KeeperException_ESTest_scaffolding
+14:15:40.604 [main] INFO org.evosuite.runtime.instrumentation.EvoClassLoader -- Keeping class: org.apache.zookeeper.test.evosuite.c0.keeperexception.KeeperException_ESTest
