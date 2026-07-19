@@ -23,9 +23,11 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.yetus.audience.InterfaceAudience;
 
 @InterfaceAudience.Public
+@SuppressWarnings("java:S1133")
 public abstract class KeeperException extends Exception {
 
     /**
@@ -34,7 +36,7 @@ public abstract class KeeperException extends Exception {
      * scope.  Non-multi requests will get a null if they try to access
      * these results.
      */
-    private List<OpResult> results;
+    private final AtomicReference<List<OpResult>> results = new AtomicReference<>();
 
     /**
      * All non-specific keeper exceptions should be constructed via
@@ -51,7 +53,7 @@ public abstract class KeeperException extends Exception {
      */
     public static KeeperException create(Code code, String path) {
         KeeperException r = create(code);
-        r.path = path;
+        r.path.set(path);
         return r;
     }
 
@@ -62,7 +64,7 @@ public abstract class KeeperException extends Exception {
     @Deprecated
     public static KeeperException create(int code, String path) {
         KeeperException r = create(Code.get(code));
-        r.path = path;
+        r.path.set(path);
         return r;
     }
 
@@ -153,7 +155,7 @@ public abstract class KeeperException extends Exception {
             return new ThrottledOpException();
         case OK:
         default:
-            throw new IllegalArgumentException("Invalid exception code:" + code.code);
+            throw new IllegalArgumentException("Invalid exception code:" + code.intValue());
         }
     }
 
@@ -165,164 +167,47 @@ public abstract class KeeperException extends Exception {
      */
     @Deprecated
     public void setCode(int code) {
-        this.code = Code.get(code);
+        this.errorCode.set(Code.get(code));
     }
 
-    /** This interface contains the original static final int constants
-     * which have now been replaced with an enumeration in Code. Do not
-     * reference this class directly, if necessary (legacy code) continue
-     * to access the constants through Code.
-     * Note: an interface is used here due to the fact that enums cannot
-     * reference constants defined within the same enum as said constants
-     * are considered initialized _after_ the enum itself. By using an
-     * interface as a super type this allows the deprecated constants to
-     * be initialized first and referenced when constructing the enums. I
-     * didn't want to have constants declared twice. This
-     * interface should be private, but it's declared public to enable
-     * javadoc to include in the user API spec.
+    /**
+     * Legacy marker retained for compatibility.
+     *
+     * @deprecated since 3.1.0; use {@link Code}.
      */
-    @SuppressWarnings("DeprecatedIsStillUsed") // still used in Code - kept until 4.0
     @Deprecated
     @InterfaceAudience.Public
     public interface CodeDeprecated {
+    }
 
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#OK} instead
-         */
-        @Deprecated
-        int Ok = 0;
+    private static final class CodeValues {
+        private static final int OK_VALUE = 0;
+        private static final int SYSTEM_ERROR = -1;
+        private static final int RUNTIME_INCONSISTENCY = -2;
+        private static final int DATA_INCONSISTENCY = -3;
+        private static final int CONNECTION_LOSS = -4;
+        private static final int MARSHALLING_ERROR = -5;
+        private static final int UNIMPLEMENTED_VALUE = -6;
+        private static final int OPERATION_TIMEOUT = -7;
+        private static final int BAD_ARGUMENTS = -8;
+        private static final int UNKNOWN_SESSION = -12;
+        private static final int NEW_CONFIG_NO_QUORUM = -13;
+        private static final int RECONFIG_IN_PROGRESS = -14;
+        private static final int API_ERROR = -100;
+        private static final int NO_NODE = -101;
+        private static final int NO_AUTH = -102;
+        private static final int BAD_VERSION = -103;
+        private static final int NO_CHILDREN_FOR_EPHEMERALS = -108;
+        private static final int NODE_EXISTS = -110;
+        private static final int NOT_EMPTY = -111;
+        private static final int SESSION_EXPIRED = -112;
+        private static final int INVALID_CALLBACK = -113;
+        private static final int INVALID_ACL = -114;
+        private static final int AUTH_FAILED = -115;
+        private static final int EPHEMERAL_ON_LOCAL_SESSION = -120;
 
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#SYSTEMERROR} instead
-         */
-        @Deprecated
-        int SystemError = -1;
-        /**
-         * @deprecated deprecated in 3.1.0, use
-         * {@link Code#RUNTIMEINCONSISTENCY} instead
-         */
-        @Deprecated
-        int RuntimeInconsistency = -2;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#DATAINCONSISTENCY}
-         * instead
-         */
-        @Deprecated
-        int DataInconsistency = -3;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#CONNECTIONLOSS}
-         * instead
-         */
-        @Deprecated
-        int ConnectionLoss = -4;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#MARSHALLINGERROR}
-         * instead
-         */
-        @Deprecated
-        int MarshallingError = -5;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#UNIMPLEMENTED}
-         * instead
-         */
-        @Deprecated
-        int Unimplemented = -6;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#OPERATIONTIMEOUT}
-         * instead
-         */
-        @Deprecated
-        int OperationTimeout = -7;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#BADARGUMENTS}
-         * instead
-         */
-        @Deprecated
-        int BadArguments = -8;
-
-        @Deprecated
-        int UnknownSession = -12;
-
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#NEWCONFIGNOQUORUM}
-         * instead
-         */
-        @Deprecated
-        int NewConfigNoQuorum = -13;
-
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#RECONFIGINPROGRESS}
-         * instead
-         */
-        @Deprecated
-        int ReconfigInProgress = -14;
-
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#APIERROR} instead
-         */
-        @Deprecated
-        int APIError = -100;
-
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#NONODE} instead
-         */
-        @Deprecated
-        int NoNode = -101;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#NOAUTH} instead
-         */
-        @Deprecated
-        int NoAuth = -102;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#BADVERSION} instead
-         */
-        @Deprecated
-        int BadVersion = -103;
-        /**
-         * @deprecated deprecated in 3.1.0, use
-         * {@link Code#NOCHILDRENFOREPHEMERALS}
-         * instead
-         */
-        @Deprecated
-        int NoChildrenForEphemerals = -108;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#NODEEXISTS} instead
-         */
-        @Deprecated
-        int NodeExists = -110;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#NOTEMPTY} instead
-         */
-        @Deprecated
-        int NotEmpty = -111;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#SESSIONEXPIRED} instead
-         */
-        @Deprecated
-        int SessionExpired = -112;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#INVALIDCALLBACK}
-         * instead
-         */
-        @Deprecated
-        int InvalidCallback = -113;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#INVALIDACL} instead
-         */
-        @Deprecated
-        int InvalidACL = -114;
-        /**
-         * @deprecated deprecated in 3.1.0, use {@link Code#AUTHFAILED} instead
-         */
-        @Deprecated
-        int AuthFailed = -115;
-
-        // This value will be used directly in {@link CODE#SESSIONMOVED}
-        // public static final int SessionMoved = -118;
-
-        @Deprecated
-        int EphemeralOnLocalSession = -120;
-
+        private CodeValues() {
+        }
     }
 
     /** Codes which represent the various KeeperException
@@ -333,36 +218,36 @@ public abstract class KeeperException extends Exception {
     @InterfaceAudience.Public
     public enum Code implements CodeDeprecated {
         /** Everything is OK */
-        OK(Ok),
+        OK(CodeValues.OK_VALUE),
 
         /** System and server-side errors.
          * This is never thrown by the server, it shouldn't be used other than
          * to indicate a range. Specifically error codes greater than this
          * value, but lesser than {@link #APIERROR}, are system errors.
          */
-        SYSTEMERROR(SystemError),
+        SYSTEMERROR(CodeValues.SYSTEM_ERROR),
 
         /** A runtime inconsistency was found */
-        RUNTIMEINCONSISTENCY(RuntimeInconsistency),
+        RUNTIMEINCONSISTENCY(CodeValues.RUNTIME_INCONSISTENCY),
         /** A data inconsistency was found */
-        DATAINCONSISTENCY(DataInconsistency),
+        DATAINCONSISTENCY(CodeValues.DATA_INCONSISTENCY),
         /** Connection to the server has been lost */
-        CONNECTIONLOSS(ConnectionLoss),
+        CONNECTIONLOSS(CodeValues.CONNECTION_LOSS),
         /** Error while marshalling or unmarshalling data */
-        MARSHALLINGERROR(MarshallingError),
+        MARSHALLINGERROR(CodeValues.MARSHALLING_ERROR),
         /** Operation is unimplemented */
-        UNIMPLEMENTED(Unimplemented),
+        UNIMPLEMENTED(CodeValues.UNIMPLEMENTED_VALUE),
         /** Operation timeout */
-        OPERATIONTIMEOUT(OperationTimeout),
+        OPERATIONTIMEOUT(CodeValues.OPERATION_TIMEOUT),
         /** Invalid arguments */
-        BADARGUMENTS(BadArguments),
+        BADARGUMENTS(CodeValues.BAD_ARGUMENTS),
         /** No quorum of new config is connected and up-to-date with the leader of last committed config - try
          *  invoking reconfiguration after new servers are connected and synced */
-        NEWCONFIGNOQUORUM(NewConfigNoQuorum),
+        NEWCONFIGNOQUORUM(CodeValues.NEW_CONFIG_NO_QUORUM),
         /** Another reconfiguration is in progress -- concurrent reconfigs not supported (yet) */
-        RECONFIGINPROGRESS(ReconfigInProgress),
+        RECONFIGINPROGRESS(CodeValues.RECONFIG_IN_PROGRESS),
         /** Unknown session (internal server use only) */
-        UNKNOWNSESSION(UnknownSession),
+        UNKNOWNSESSION(CodeValues.UNKNOWN_SESSION),
 
         /** API errors.
          * This is never thrown by the server, it shouldn't be used other than
@@ -370,35 +255,35 @@ public abstract class KeeperException extends Exception {
          * value are API errors (while values less than this indicate a
          * {@link #SYSTEMERROR}).
          */
-        APIERROR(APIError),
+        APIERROR(CodeValues.API_ERROR),
 
         /** Node does not exist */
-        NONODE(NoNode),
+        NONODE(CodeValues.NO_NODE),
         /** Not authenticated */
-        NOAUTH(NoAuth),
+        NOAUTH(CodeValues.NO_AUTH),
         /** Version conflict
          In case of reconfiguration: reconfig requested from config version X but last seen config has a different version Y */
-        BADVERSION(BadVersion),
+        BADVERSION(CodeValues.BAD_VERSION),
         /** Ephemeral nodes may not have children */
-        NOCHILDRENFOREPHEMERALS(NoChildrenForEphemerals),
+        NOCHILDRENFOREPHEMERALS(CodeValues.NO_CHILDREN_FOR_EPHEMERALS),
         /** The node already exists */
-        NODEEXISTS(NodeExists),
+        NODEEXISTS(CodeValues.NODE_EXISTS),
         /** The node has children */
-        NOTEMPTY(NotEmpty),
+        NOTEMPTY(CodeValues.NOT_EMPTY),
         /** The session has been expired by the server */
-        SESSIONEXPIRED(SessionExpired),
+        SESSIONEXPIRED(CodeValues.SESSION_EXPIRED),
         /** Invalid callback specified */
-        INVALIDCALLBACK(InvalidCallback),
+        INVALIDCALLBACK(CodeValues.INVALID_CALLBACK),
         /** Invalid ACL specified */
-        INVALIDACL(InvalidACL),
+        INVALIDACL(CodeValues.INVALID_ACL),
         /** Client authentication failed */
-        AUTHFAILED(AuthFailed),
+        AUTHFAILED(CodeValues.AUTH_FAILED),
         /** Session moved to another server, so operation is ignored */
         SESSIONMOVED(-118),
         /** State-changing request is passed to read-only server */
         NOTREADONLY(-119),
         /** Attempt to create ephemeral node on a local session */
-        EPHEMERALONLOCALSESSION(EphemeralOnLocalSession),
+        EPHEMERALONLOCALSESSION(CodeValues.EPHEMERAL_ON_LOCAL_SESSION),
         /** Attempts to remove a non-existing watcher */
         NOWATCHER(-121),
         /** Request not completed within max allowed time.*/
@@ -421,13 +306,13 @@ public abstract class KeeperException extends Exception {
 
         static {
             for (Code c : EnumSet.allOf(Code.class)) {
-                lookup.put(c.code, c);
+                lookup.put(c.value, c);
             }
         }
 
-        private final int code;
-        Code(int code) {
-            this.code = code;
+        private final int value;
+        Code(int value) {
+            this.value = value;
         }
 
         /**
@@ -435,7 +320,7 @@ public abstract class KeeperException extends Exception {
          * @return error code as integer
          */
         public int intValue() {
-            return code;
+            return value;
         }
 
         /**
@@ -519,17 +404,17 @@ public abstract class KeeperException extends Exception {
         }
     }
 
-    private Code code;
+    private final AtomicReference<Code> errorCode;
 
-    private String path;
+    private final AtomicReference<String> path;
 
-    public KeeperException(Code code) {
-        this.code = code;
+    protected KeeperException(Code code) {
+        this(code, null);
     }
 
-    KeeperException(Code code, String path) {
-        this.code = code;
-        this.path = path;
+    protected KeeperException(Code code, String path) {
+        this.errorCode = new AtomicReference<>(code);
+        this.path = new AtomicReference<>(path);
     }
 
     /**
@@ -539,7 +424,7 @@ public abstract class KeeperException extends Exception {
      */
     @Deprecated
     public int getCode() {
-        return code.code;
+        return errorCode.get().intValue();
     }
 
     /**
@@ -547,7 +432,7 @@ public abstract class KeeperException extends Exception {
      * @return the error Code for this exception
      */
     public Code code() {
-        return code;
+        return errorCode.get();
     }
 
     /**
@@ -555,19 +440,19 @@ public abstract class KeeperException extends Exception {
      * @return the path associated with this error, null if none
      */
     public String getPath() {
-        return path;
+        return path.get();
     }
 
     @Override
     public String getMessage() {
-        if (path == null || path.isEmpty()) {
-            return "KeeperErrorCode = " + getCodeMessage(code);
+        if (path.get() == null || path.get().isEmpty()) {
+            return "KeeperErrorCode = " + getCodeMessage(errorCode.get());
         }
-        return "KeeperErrorCode = " + getCodeMessage(code) + " for " + path;
+        return "KeeperErrorCode = " + getCodeMessage(errorCode.get()) + " for " + path.get();
     }
 
     void setMultiResults(List<OpResult> results) {
-        this.results = results;
+        this.results.set(results);
     }
 
     /**
@@ -579,7 +464,8 @@ public abstract class KeeperException extends Exception {
      *
      */
     public List<OpResult> getResults() {
-        return results != null ? new ArrayList<OpResult>(results) : null;
+        List<OpResult> currentResults = results.get();
+        return currentResults != null ? new ArrayList<OpResult>(currentResults) : null;
     }
 
     /**

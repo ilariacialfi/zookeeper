@@ -1,7 +1,0 @@
-
-@org.apache.zookeeper.Version#getRevisionHash()Ljava/lang/String;J
-@zookeeper-server/src/main/java/org/apache/zookeeper/Version.java' '(("1*!
-1( (("
-( ((
-""B "
-org.apache.zookeeper.VersionH

@@ -1,7 +1,7 @@
 organization=ilariacialfi
-projectKey=ilariacialfi_zookeeper_C4
+projectKey=ilariacialfi_zookeeper_testsmells
 serverUrl=https://sonarcloud.io
-serverVersion=8.0.0.96287
-dashboardUrl=https://sonarcloud.io/dashboard?id=ilariacialfi_zookeeper_C4
-ceTaskId=AZ9byszeTd3f98huU4WS
-ceTaskUrl=https://sonarcloud.io/api/ce/task?id=AZ9byszeTd3f98huU4WS
+serverVersion=8.0.0.96844
+dashboardUrl=https://sonarcloud.io/dashboard?id=ilariacialfi_zookeeper_testsmells
+ceTaskId=AZ9mu-jXgxcz_P1vyqoY
+ceTaskUrl=https://sonarcloud.io/api/ce/task?id=AZ9mu-jXgxcz_P1vyqoY

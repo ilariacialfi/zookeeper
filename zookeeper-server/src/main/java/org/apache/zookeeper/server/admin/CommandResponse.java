@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.zookeeper.server.admin;
 
 import java.io.InputStream;
@@ -32,6 +31,7 @@ public class CommandResponse {
      * The key in the map returned by {@link #toMap()} for the command name.
      */
     public static final String KEY_COMMAND = "command";
+
     /**
      * The key in the map returned by {@link #toMap()} for the error string.
      */
@@ -52,6 +52,7 @@ public class CommandResponse {
     public CommandResponse(String command) {
         this(command, null, HttpServletResponse.SC_OK);
     }
+
     /**
      * Creates a new response.
      *
@@ -60,9 +61,8 @@ public class CommandResponse {
      * @param statusCode http status code
      */
     public CommandResponse(String command, String error, int statusCode) {
-       this(command, error, statusCode, null);
+        this(command, error, statusCode, null);
     }
-
 
     /**
      * Creates a new response.
@@ -100,7 +100,7 @@ public class CommandResponse {
     }
 
     /**
-     * Gets the http status code
+     * Gets the http status code.
      *
      * @return http status code
      */
@@ -109,7 +109,9 @@ public class CommandResponse {
     }
 
     /**
-     * Sets the http status code
+     * Sets the http status code.
+     *
+     * @param statusCode http status code
      */
     public void setStatusCode(int statusCode) {
         this.statusCode = statusCode;
@@ -125,10 +127,12 @@ public class CommandResponse {
     }
 
     /**
-     * Sets the InputStream
+     * Sets the InputStream.
+     *
+     * @param inputStream InputStream
      */
     public void setInputStream(final InputStream inputStream) {
-         this.inputStream = inputStream;
+        this.inputStream = inputStream;
     }
 
     /**
@@ -147,7 +151,7 @@ public class CommandResponse {
      *
      * @param m map of key/value pairs
      */
-    public void putAll(Map<? extends String, ?> m) {
+    public void putAll(Map<String, ?> m) {
         data.putAll(m);
     }
 
@@ -162,7 +166,7 @@ public class CommandResponse {
     }
 
     /**
-     * Returns all headers
+     * Returns all headers.
      *
      * @return map representation of all headers
      */
@@ -183,5 +187,4 @@ public class CommandResponse {
         m.putAll(data);
         return m;
     }
-
 }
